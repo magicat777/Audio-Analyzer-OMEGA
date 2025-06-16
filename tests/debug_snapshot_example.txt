@@ -1,0 +1,74 @@
+OMEGA-4 Debug Snapshot Feature
+==============================
+
+Press 'D' at any time while the analyzer is running to capture a debug snapshot.
+The snapshot will be printed to the terminal without interrupting the visualization.
+
+Example output when pressing 'D':
+
+================================================================================
+PROFESSIONAL AUDIO ANALYZER V4 OMEGA-4 - DEBUG SNAPSHOT - 11:15:42
+================================================================================
+
+[PERFORMANCE METRICS]
+FPS: Current=104, Average=104.3, Target=60
+Processing latency: 5.4ms
+Audio buffer: 512 samples (10.7ms)
+FFT window: 4096 samples (85.3ms)
+Total latency: 101.4ms
+
+[PERCEPTUAL FREQUENCY MAPPING]
+Mode: Logarithmic (20Hz - 24kHz)
+Distribution:
+  Bass (20-250Hz): 33% of bars (340 bars)
+  Low-mid (250-500Hz): 9% of bars (93 bars)
+  Mid (500-2000Hz): 19% of bars (198 bars)
+  High-mid (2000-6000Hz): 15% of bars (158 bars)
+  High (6000-20000Hz): 17% of bars (173 bars)
+Performance: ✅ Excellent
+
+[SPECTRUM VISUALIZATION]
+                                                                                
+██████████████████████████████████ ███████    █    █                            
+██████████████████████████████████████████    ██   █                            
+██████████████████████████████████████████▓▓▓▓██▓ ▓█ ▓                          
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓                          
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒                        
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒▒▒  ▒ ▒▒▒▒  ▒           
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒▒▒░░▒░▒▒▒▒░░▒░░░░░░░░   
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒▒▒░░▒░▒▒▒▒░░▒░░░░░░░░   
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒▒▒░░▒░▒▒▒▒░░▒░░░░░░░░▪  
+██████████████████████████████████████████▓▓▓▓██▓▓▓█▓▓▒▒▒▒░░▒░▒▒▒▒░░▒░░░░░░░░▪▪▪
+--------------------------------------------------------------------------------
+20Hz                                   1kHz                                   20kHz
+
+Stats: Max=1.00, Avg=0.76, Min=0.00
+
+[FREQUENCY DISTRIBUTION]
+Bass         [   60-  250Hz]: ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂ avg=101.71 max=456.14
+Low-mid      [  250-  500Hz]: ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂ avg=63.23 max=316.08
+Mid          [  500- 2000Hz]: ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂ avg=1.39 max=15.47
+High-mid     [ 2000- 4000Hz]: ▂▂▂▂▂▂▂ avg=0.36 max=10.76
+Presence     [ 4000- 6000Hz]:  avg=0.02 max=0.11
+Brilliance   [ 6000-10000Hz]:  avg=0.01 max=0.04
+Air          [10000-20000Hz]:  avg=0.01 max=0.03
+
+[PROFESSIONAL METERING - ITU-R BS.1770-4]
+
+[VOICE DETECTION]
+Has Voice: NO
+Confidence: 0.0%
+
+[DYNAMIC RANGE]
+Dynamic Range: 64.2 dB
+Active bars: 904/924 (97.8%)
+
+================================================================================
+Debug snapshot printed to terminal
+
+Benefits of the snapshot approach:
+- No continuous scrolling in terminal
+- Easy to copy and paste specific snapshots
+- Can capture at precise moments of interest
+- Doesn't interfere with normal operation
+- Clean, organized output format
