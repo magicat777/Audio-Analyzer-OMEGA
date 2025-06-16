@@ -1,0 +1,1 @@
+"""Panel plugins for OMEGA-4"""

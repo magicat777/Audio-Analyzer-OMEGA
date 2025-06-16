@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Production
+dist/
+build/
+
+# Testing
+coverage/
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/settings.json
+
+# Generated files
+*.min.js
+*.min.css
