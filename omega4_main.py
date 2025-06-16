@@ -1186,21 +1186,22 @@ class ProfessionalLiveAudioAnalyzer:
             self.save_screenshot()
         elif event.key == pygame.K_F11:
             self.toggle_fullscreen()
-        elif event.key >= pygame.K_1 and event.key <= pygame.K_9:
+        elif (event.key >= pygame.K_1 and event.key <= pygame.K_9) or event.key == pygame.K_0:
             # Professional window presets with minimum heights for panels
-            # Minimum height: 1150px (no panels), 1420px (bass), 1690px (bass+1 row), 1950px (bass+2 rows)
+            # Updated heights to account for 380px integrated panel
+            # Base: 1150px, +270px bass, +260px per row, +130px for integrated panel
             presets = [
                 (1280, 1150),  # 1 - Minimum (no panels)
                 (1400, 1420),  # 2 - With bass zoom
                 (1600, 1420),  # 3 - HD+ width with bass
                 (1920, 1420),  # 4 - Full HD width with bass
-                (1920, 1690),  # 5 - Full HD with 1 row panels
-                (2560, 1690),  # 6 - QHD width with 1 row
-                (2560, 1950),  # 7 - QHD with 2 rows panels
-                (3440, 1950),  # 8 - Ultra-wide with 2 rows
+                (1920, 1690),  # 5 - Full HD with 1 row panels (250px)
+                (2560, 1820),  # 6 - QHD width with 1 row + integrated (380px)
+                (2560, 2080),  # 7 - QHD with 2 rows panels + integrated
+                (3440, 2080),  # 8 - Ultra-wide with 2 rows + integrated
                 (3840, 2160)   # 9 - 4K UHD (full panels)
             ]
-            preset_idx = event.key - pygame.K_1
+            preset_idx = (event.key - pygame.K_1) if event.key != pygame.K_0 else 9  # 0 key = preset 10
             if preset_idx < len(presets):
                 # Use the actual preset dimensions
                 new_width, new_height = presets[preset_idx]
@@ -1792,9 +1793,9 @@ class ProfessionalLiveAudioAnalyzer:
             rows_needed = (tech_panel_count + max_columns - 1) // max_columns  # Ceiling division
             tech_panels_height = rows_needed * (panel_height + panel_padding) - panel_padding
             
-            # Add extra height if integrated panel is shown
+            # Add extra height if integrated panel is shown (380px - 250px base = 130px extra)
             if self.show_integrated_music:
-                tech_panels_height += 50  # Extra 50px for integrated panel
+                tech_panels_height += 130  # Extra 130px for integrated panel (380px total)
             
             base_height += tech_panels_height + panel_padding
         
