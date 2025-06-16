@@ -213,7 +213,20 @@ class GenreClassifier:
             else:
                 features['harmonic_complexity'] = 0.7  # Complex (classical/jazz)
         else:
-            features['harmonic_complexity'] = 0.1  # Default to simple
+            # Calculate harmonic complexity from FFT data if harmonic series not available
+            if fft_data is not None and len(fft_data) > 10:
+                # Use spectral flatness as proxy for harmonic complexity
+                magnitude = np.abs(fft_data)
+                geometric_mean = np.exp(np.mean(np.log(magnitude + 1e-10)))
+                arithmetic_mean = np.mean(magnitude)
+                if arithmetic_mean > 0:
+                    spectral_flatness = geometric_mean / arithmetic_mean
+                    # Convert to complexity score (flatter = simpler)
+                    features['harmonic_complexity'] = 1.0 - spectral_flatness
+                else:
+                    features['harmonic_complexity'] = 0.1
+            else:
+                features['harmonic_complexity'] = 0.1  # Default to simple
         
         # Tempo estimation (simplified)
         features['estimated_tempo'] = self.estimate_tempo_from_transients(drum_info)
@@ -478,6 +491,21 @@ class GenreClassifier:
                 genre_scores[genre] = score / weight_sum
             else:
                 genre_scores[genre] = 0.0
+                
+            # Apply genre-specific penalties/bonuses to avoid defaulting to Folk/Electronic
+            if genre == 'Folk':
+                # Folk should have low percussion and simple harmony
+                if features.get('percussion_strength', 0) > 0.7:
+                    genre_scores[genre] *= 0.3  # Heavy penalty for strong percussion
+                if features.get('bass_emphasis', 0) > 0.6:
+                    genre_scores[genre] *= 0.5  # Penalty for bass emphasis
+                    
+            elif genre == 'Electronic':
+                # Electronic should have steady beats and synthetic timbres
+                if features.get('harmonic_complexity', 0) > 0.5:
+                    genre_scores[genre] *= 0.6  # Penalty for complex harmony
+                if features.get('percussion_strength', 0) < 0.5:
+                    genre_scores[genre] *= 0.5  # Electronic needs beats
         
         # Add temporal smoothing
         self.genre_history.append(genre_scores)
@@ -497,6 +525,19 @@ class GenreClassifier:
                 for genre in smoothed_scores:
                     if smoothed_scores[genre] == max_score:
                         smoothed_scores[genre] *= 1.5
+                        
+            # Additional check: if Hip-Hop has significant features, boost it
+            if 'Hip-Hop' in smoothed_scores:
+                hip_hop_features_present = 0
+                if features.get('bass_emphasis', 0) > 0.7:
+                    hip_hop_features_present += 1
+                if features.get('percussion_strength', 0) > 0.8:
+                    hip_hop_features_present += 1
+                if features.get('beat_regularity', 0) > 0.8:
+                    hip_hop_features_present += 1
+                    
+                if hip_hop_features_present >= 2:
+                    smoothed_scores['Hip-Hop'] *= 1.3  # Boost hip-hop when features match
         
         # Normalize to probabilities
         total = sum(smoothed_scores.values())

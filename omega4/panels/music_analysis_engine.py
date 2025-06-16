@@ -296,11 +296,17 @@ class MusicAnalysisEngine:
         key_conf = harmonic['key_strength']
         genre_conf = genre['genre_confidence']
         
-        # Weighted combination
+        # Weighted combination - ensure weights sum to 1.0
+        # harmonic_weight = 0.4, timbral_weight = 0.3, rhythmic_weight = 0.3
         base_confidence = (
             self.config.harmonic_weight * key_conf +
             self.config.timbral_weight * genre_conf
         )
+        
+        # Add rhythmic confidence if available
+        if 'percussion_strength' in genre:
+            rhythm_conf = genre.get('percussion_strength', 0.5)
+            base_confidence += self.config.rhythmic_weight * rhythm_conf
         
         # Apply cross-validation bonus
         if self.config.enable_cross_validation:
@@ -312,6 +318,13 @@ class MusicAnalysisEngine:
             stability = self._calculate_temporal_stability()
             base_confidence += stability * 0.1
             
+        # Apply non-linear scaling to avoid getting stuck at 54%
+        # This helps spread the confidence range
+        if base_confidence < 0.3:
+            base_confidence = base_confidence * 0.8
+        elif base_confidence > 0.7:
+            base_confidence = 0.7 + (base_confidence - 0.7) * 1.2
+            
         return min(1.0, base_confidence)
     
     def _check_genre_harmonic_consistency(self, harmonic: Dict[str, Any], 
@@ -320,6 +333,17 @@ class MusicAnalysisEngine:
         current_genre = self.genre_classifier.current_genre
         
         if current_genre not in self.config.genre_harmonic_patterns:
+            # For genres without defined patterns, use a dynamic approach
+            if current_genre == 'Hip-Hop':
+                # Hip-hop typically has simple harmony and stable keys
+                consistency = 0.0
+                if harmonic.get('chord_complexity', 0) <= 2:
+                    consistency += 0.4
+                if harmonic.get('harmonic_change_rate', 0) < 0.3:
+                    consistency += 0.3
+                if harmonic.get('key_strength', 0) > 0.7:
+                    consistency += 0.3
+                return consistency
             return 0.5  # Neutral for unknown genres
             
         expected_patterns = self.config.genre_harmonic_patterns[current_genre]

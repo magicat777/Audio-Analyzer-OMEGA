@@ -2056,8 +2056,9 @@ class ProfessionalLiveAudioAnalyzer:
                             col = 2
                             panel_x = grid_start_x + col * (panel_width + panel_padding)
                             actual_panel_width = (panel_width * 2) + panel_padding  # Span 2 columns
-                            # Increase height for integrated panel to fit chromagram
-                            actual_panel_height = panel_height + 50  # 310px total
+                            # Increase height for integrated panel to fit all content including hip-hop features
+                            # Base height + genre/harmony sections + hip-hop + cross-analysis + chromagram + confidence graph
+                            actual_panel_height = panel_height + 120  # 380px total to fit all content
                         
                         # Handle room panel specially
                         if panel_type == 'room':
@@ -2132,7 +2133,7 @@ class ProfessionalLiveAudioAnalyzer:
                         last_row = last_panel_idx // max_columns
                         # Get the actual panel height (some panels like integrated are taller)
                         last_panel_type = active_panels[last_panel_idx][0]
-                        last_panel_height = panel_height + 50 if last_panel_type == 'integrated' else panel_height
+                        last_panel_height = panel_height + 120 if last_panel_type == 'integrated' else panel_height
                         last_row_bottom = tech_panels_start_y + last_row * (panel_height + panel_padding) + last_panel_height
                         
                         # Check if we're too close to footer (footer_y = height - 80)

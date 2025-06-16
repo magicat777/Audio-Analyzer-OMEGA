@@ -113,13 +113,22 @@ class ChromagramAnalyzer:
         best_correlation = -1
         best_is_major = True
         
+        # Skip if chromagram is empty
+        if np.sum(chroma) == 0:
+            return "Unknown", 0.0
+        
         # Get genre-specific weights if available
         genre_weights = self.genre_profiles.get(self.current_genre.lower(), self.genre_profiles['pop'])
         major_weights = genre_weights['major_weights']
         minor_weights = genre_weights['minor_weights']
         
+        # Normalize chromagram first to reduce effect of dominant notes
+        # Use square root to compress dynamic range and capture more notes
+        chroma_sqrt = np.sqrt(chroma)
+        chroma_norm = chroma_sqrt / (np.sum(chroma_sqrt) + 1e-10)
+        
         # Apply genre-specific chromagram weighting
-        weighted_chroma = chroma * (major_weights + minor_weights) / 2
+        weighted_chroma = chroma_norm * (major_weights + minor_weights) / 2
         
         # Test all 24 possible keys (12 major + 12 minor)
         for i in range(12):
