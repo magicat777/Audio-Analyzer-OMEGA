@@ -131,6 +131,8 @@ class ChromagramAnalyzer:
         weighted_chroma = chroma_norm * (major_weights + minor_weights) / 2
         
         # Test all 24 possible keys (12 major + 12 minor)
+        correlations = []  # Store all correlations for debugging
+        
         for i in range(12):
             # Rotate profiles to test each key
             major_profile_rotated = np.roll(self.major_profile, i)
@@ -140,12 +142,23 @@ class ChromagramAnalyzer:
             major_profile_weighted = major_profile_rotated * np.roll(major_weights, i)
             minor_profile_weighted = minor_profile_rotated * np.roll(minor_weights, i)
             
+            # Normalize profiles to ensure fair comparison
+            major_profile_weighted = major_profile_weighted / (np.sum(major_profile_weighted) + 1e-10)
+            minor_profile_weighted = minor_profile_weighted / (np.sum(minor_profile_weighted) + 1e-10)
+            
             # Calculate correlation coefficients
-            if np.std(weighted_chroma) > 0:  # Avoid division by zero
+            if np.std(weighted_chroma) > 0 and np.std(major_profile_weighted) > 0:
                 major_corr = np.corrcoef(weighted_chroma, major_profile_weighted)[0, 1]
+            else:
+                major_corr = 0
+                
+            if np.std(weighted_chroma) > 0 and np.std(minor_profile_weighted) > 0:
                 minor_corr = np.corrcoef(weighted_chroma, minor_profile_weighted)[0, 1]
             else:
-                major_corr = minor_corr = 0
+                minor_corr = 0
+                
+            correlations.append((i, 'major', major_corr))
+            correlations.append((i, 'minor', minor_corr))
             
             # Genre-specific adjustments
             if self.current_genre.lower() == 'jazz':
@@ -163,16 +176,20 @@ class ChromagramAnalyzer:
                     major_corr *= 1.05
                     minor_corr *= 1.05
             
-            # Check if this is the best correlation so far
-            if major_corr > best_correlation:
-                best_correlation = major_corr
-                best_key = f"{self.note_names[i]} Major"
-                best_is_major = True
-                
-            if minor_corr > best_correlation:
-                best_correlation = minor_corr
-                best_key = f"{self.note_names[i]} Minor"
-                best_is_major = False
+            # Apply genre adjustments to the correlations we just added
+            if self.current_genre.lower() == 'jazz' and self.note_names[i] in ['F', 'Bb', 'Eb', 'Ab']:
+                correlations[-2] = (correlations[-2][0], correlations[-2][1], correlations[-2][2] * 1.1)
+                correlations[-1] = (correlations[-1][0], correlations[-1][1], correlations[-1][2] * 1.1)
+            elif self.current_genre.lower() == 'classical' and self.note_names[i] in ['C', 'G', 'D', 'A', 'F']:
+                correlations[-2] = (correlations[-2][0], correlations[-2][1], correlations[-2][2] * 1.05)
+            elif self.current_genre.lower() == 'rock' and self.note_names[i] in ['E', 'A', 'D', 'G']:
+                correlations[-2] = (correlations[-2][0], correlations[-2][1], correlations[-2][2] * 1.05)
+                correlations[-1] = (correlations[-1][0], correlations[-1][1], correlations[-1][2] * 1.05)
+        
+        # Find best correlation from all candidates
+        best_idx, best_mode, best_correlation = max(correlations, key=lambda x: x[2])
+        best_key = f"{self.note_names[best_idx]} {best_mode.capitalize()}"
+        best_is_major = (best_mode == 'major')
         
         # Add to history
         if best_key:

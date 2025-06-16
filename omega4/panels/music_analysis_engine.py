@@ -296,17 +296,20 @@ class MusicAnalysisEngine:
         key_conf = harmonic['key_strength']
         genre_conf = genre['genre_confidence']
         
-        # Weighted combination - ensure weights sum to 1.0
-        # harmonic_weight = 0.4, timbral_weight = 0.3, rhythmic_weight = 0.3
-        base_confidence = (
-            self.config.harmonic_weight * key_conf +
-            self.config.timbral_weight * genre_conf
-        )
-        
-        # Add rhythmic confidence if available
+        # Extract rhythmic confidence from features
+        rhythm_conf = 0.5  # Default
         if 'percussion_strength' in genre:
             rhythm_conf = genre.get('percussion_strength', 0.5)
-            base_confidence += self.config.rhythmic_weight * rhythm_conf
+        
+        # Weighted combination with proper normalization
+        # Weights should already sum to 1.0 from config
+        total_weight = self.config.harmonic_weight + self.config.timbral_weight + self.config.rhythmic_weight
+        
+        base_confidence = (
+            self.config.harmonic_weight * key_conf +
+            self.config.timbral_weight * genre_conf +
+            self.config.rhythmic_weight * rhythm_conf
+        ) / total_weight
         
         # Apply cross-validation bonus
         if self.config.enable_cross_validation:
@@ -337,13 +340,45 @@ class MusicAnalysisEngine:
             if current_genre == 'Hip-Hop':
                 # Hip-hop typically has simple harmony and stable keys
                 consistency = 0.0
+                checks = 0
+                
+                # Check for simple harmony
                 if harmonic.get('chord_complexity', 0) <= 2:
-                    consistency += 0.4
+                    consistency += 0.8
+                checks += 1
+                
+                # Check for stable harmony (few changes)
                 if harmonic.get('harmonic_change_rate', 0) < 0.3:
-                    consistency += 0.3
+                    consistency += 0.9
+                checks += 1
+                
+                # Check for strong key (hip-hop usually has clear tonality)
+                if harmonic.get('key_strength', 0) > 0.6:
+                    consistency += 0.7
+                checks += 1
+                
+                # Check for limited pitch variety (hip-hop uses fewer notes)
+                if harmonic.get('pitch_class_entropy', 2.0) < 2.5:
+                    consistency += 0.8
+                checks += 1
+                
+                return consistency / max(1, checks)
+            
+            elif current_genre == 'Country':
+                # Country has simple harmony, major keys
+                consistency = 0.0
+                checks = 0
+                
+                if harmonic.get('chord_complexity', 0) <= 2:
+                    consistency += 0.7
+                checks += 1
+                
                 if harmonic.get('key_strength', 0) > 0.7:
-                    consistency += 0.3
-                return consistency
+                    consistency += 0.8
+                checks += 1
+                
+                return consistency / max(1, checks)
+            
             return 0.5  # Neutral for unknown genres
             
         expected_patterns = self.config.genre_harmonic_patterns[current_genre]

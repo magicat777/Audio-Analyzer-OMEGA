@@ -217,16 +217,29 @@ class GenreClassifier:
             if fft_data is not None and len(fft_data) > 10:
                 # Use spectral flatness as proxy for harmonic complexity
                 magnitude = np.abs(fft_data)
-                geometric_mean = np.exp(np.mean(np.log(magnitude + 1e-10)))
-                arithmetic_mean = np.mean(magnitude)
-                if arithmetic_mean > 0:
-                    spectral_flatness = geometric_mean / arithmetic_mean
-                    # Convert to complexity score (flatter = simpler)
-                    features['harmonic_complexity'] = 1.0 - spectral_flatness
+                # Only use frequencies up to 4000Hz for complexity calculation
+                if len(freqs) == len(magnitude):
+                    mask = freqs < 4000
+                    magnitude = magnitude[mask]
+                
+                # Avoid log of zero
+                safe_magnitude = magnitude[magnitude > 1e-10]
+                if len(safe_magnitude) > 0:
+                    geometric_mean = np.exp(np.mean(np.log(safe_magnitude)))
+                    arithmetic_mean = np.mean(safe_magnitude)
+                    if arithmetic_mean > 0:
+                        spectral_flatness = geometric_mean / arithmetic_mean
+                        # Convert to complexity score with better dynamic range
+                        # Spectral flatness ranges from 0 to 1, where 1 is white noise
+                        # For music, typical values are 0.1-0.5
+                        # Scale and clip to get better distribution
+                        features['harmonic_complexity'] = np.clip((1.0 - spectral_flatness) * 1.5, 0.0, 1.0)
+                    else:
+                        features['harmonic_complexity'] = 0.2
                 else:
-                    features['harmonic_complexity'] = 0.1
+                    features['harmonic_complexity'] = 0.2
             else:
-                features['harmonic_complexity'] = 0.1  # Default to simple
+                features['harmonic_complexity'] = 0.2  # Default to simple
         
         # Tempo estimation (simplified)
         features['estimated_tempo'] = self.estimate_tempo_from_transients(drum_info)
@@ -539,15 +552,29 @@ class GenreClassifier:
                 if hip_hop_features_present >= 2:
                     smoothed_scores['Hip-Hop'] *= 1.3  # Boost hip-hop when features match
         
-        # Normalize to probabilities
+        # Normalize to probabilities with better spread
         total = sum(smoothed_scores.values())
         if total > 0:
+            # First normalize
             for genre in smoothed_scores:
                 smoothed_scores[genre] /= total
+                
+            # Apply softmax-like transformation to spread probabilities
+            # This prevents all genres from clustering around 10-13%
+            temp = 2.0  # Temperature parameter - higher = more spread
+            exp_scores = {}
+            for genre in smoothed_scores:
+                exp_scores[genre] = np.exp(smoothed_scores[genre] * temp)
+            
+            exp_total = sum(exp_scores.values())
+            for genre in smoothed_scores:
+                smoothed_scores[genre] = exp_scores[genre] / exp_total
         else:
-            # If no scores, set all to equal probability
+            # If no scores, set unknown
+            smoothed_scores = {'Unknown': 1.0}
             for genre in self.genres:
-                smoothed_scores[genre] = 1.0 / len(self.genres)
+                if genre != 'Unknown':
+                    smoothed_scores[genre] = 0.0
         
         return smoothed_scores
     
