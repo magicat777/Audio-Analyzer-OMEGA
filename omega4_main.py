@@ -935,7 +935,7 @@ class ProfessionalLiveAudioAnalyzer:
         if self.show_integrated_music and not self.frozen_integrated_music and self.adaptive_updater.should_update('integrated_music'):
             # Get raw audio data for music analysis
             # Use the original audio data before any processing
-            raw_audio = audio_data.copy()
+            raw_audio = audio_windowed.copy()
             
             # Compute dedicated FFT for music analysis with raw data
             analysis_fft_size = 4096  # Fixed size for consistency
