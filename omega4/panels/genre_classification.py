@@ -739,6 +739,23 @@ class GenreClassificationPanel:
         Enhanced to accept harmonic features from chromagram analysis
         """
         if fft_data is not None and len(fft_data) > 0 and audio_chunk is not None:
+            # Check for silence - if RMS is very low, don't classify
+            rms = np.sqrt(np.mean(audio_chunk ** 2))
+            if rms < 0.001:  # Silence threshold
+                # Reset to unknown when silent
+                self.genre_info = {
+                    'genres': {'Unknown': 1.0},
+                    'top_genre': 'Unknown',
+                    'confidence': 0.0,
+                    'features': {},
+                    'top_3': [('Unknown', 1.0)]
+                }
+                self.genre_probabilities = {'Unknown': 1.0}
+                self.features = {}
+                self.current_genre = 'Unknown'
+                self.genre_confidence = 0.0
+                return
+            
             # Update cross-panel data
             if chromagram_data is not None:
                 self.chromagram_data = chromagram_data

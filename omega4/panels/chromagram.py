@@ -328,7 +328,7 @@ class ChromagramPanel:
         # Display state
         self.chromagram_info = {
             'chromagram': np.zeros(12),
-            'key': 'C Major',
+            'key': 'Unknown',
             'is_major': True,
             'confidence': 0.0,
             'stability': 0.0,
@@ -341,7 +341,7 @@ class ChromagramPanel:
         
         # Expose data for integration
         self.chromagram = np.zeros(12)
-        self.detected_key = 'C Major'
+        self.detected_key = 'Unknown'
         self.key_confidence = 0.0
         self.current_chord = 'N/A'
         self.chord_confidence = 0.0
@@ -368,6 +368,24 @@ class ChromagramPanel:
         Enhanced to accept genre context and detect chords
         """
         if fft_data is not None and len(fft_data) > 0:
+            # Check for silence
+            if audio_data is not None:
+                rms = np.sqrt(np.mean(audio_data ** 2))
+                if rms < 0.001:  # Silence threshold
+                    # Reset to default state when silent
+                    self.chromagram = np.zeros(12)
+                    self.detected_key = 'Unknown'
+                    self.key_confidence = 0.0
+                    self.key_stability = 0.0
+                    self.current_chord = 'N/A'
+                    self.chord_confidence = 0.0
+                    self.chord_sequence = []
+                    self.alternative_keys = []
+                    self.chord_progression = []
+                    self.harmonic_rhythm = 0.0
+                    self.circle_position = 0
+                    return
+            
             # Update genre context if provided
             if current_genre:
                 self.analyzer.set_genre_context(current_genre)

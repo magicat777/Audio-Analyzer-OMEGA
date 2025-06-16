@@ -95,6 +95,20 @@ class HipHopDetector:
                 freqs: np.ndarray, drum_info: Dict) -> Dict[str, float]:
         """Perform comprehensive hip-hop analysis"""
         
+        # Check for silence first
+        if audio_chunk is not None and len(audio_chunk) > 0:
+            rms = np.sqrt(np.mean(audio_chunk ** 2))
+            if rms < 0.001:  # Silence threshold
+                # Return no hip-hop detected during silence
+                return {
+                    'confidence': 0.0,
+                    'features': {},
+                    'subgenre': 'unknown',
+                    'is_hip_hop': False,
+                    'sub_bass_detected': False,
+                    'strong_beat': False
+                }
+        
         # Multi-layer feature extraction
         features = {}
         

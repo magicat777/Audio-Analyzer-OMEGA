@@ -132,6 +132,47 @@ class MusicAnalysisEngine:
         Returns:
             Comprehensive music analysis results
         """
+        # Check for silence first
+        if audio_data is not None and len(audio_data) > 0:
+            rms = np.sqrt(np.mean(audio_data ** 2))
+            if rms < 0.001:  # Silence threshold
+                # Return default/unknown state during silence
+                silence_results = {
+                    'harmony': {
+                        'key': 'Unknown',
+                        'key_confidence': 0.0,
+                        'chords': [],
+                        'chromagram': np.zeros(12),
+                        'harmonic_complexity': 0.0,
+                        'circle_position': 0
+                    },
+                    'genre': {
+                        'top_genre': 'Unknown',
+                        'confidence': 0.0,
+                        'all_genres': {'Unknown': 1.0},
+                        'features': {}
+                    },
+                    'hip_hop': {
+                        'confidence': 0.0,
+                        'features': {},
+                        'subgenre': 'unknown',
+                        'is_hip_hop': False
+                    },
+                    'cross_analysis': {
+                        'overall_confidence': 0.0,
+                        'harmonic_genre_consistency': 0.0,
+                        'suggested_key_for_genre': 'Unknown',
+                        'genre_typical_progression': '',
+                        'cross_features': {}
+                    },
+                    'temporal': {
+                        'stability': 0.0,
+                        'trend': 'stable'
+                    }
+                }
+                self.current_analysis = silence_results
+                return silence_results
+        
         # Update individual analyzers
         self.chromagram.update(fft_magnitude, audio_data, frequencies)
         self.genre_classifier.update(
