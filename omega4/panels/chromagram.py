@@ -77,18 +77,29 @@ class ChromagramAnalyzer:
         """Extract 12-bin chromagram from FFT data"""
         chroma = np.zeros(12)
         A4 = 440.0
+        C0 = A4 * np.power(2, -4.75)  # C0 = 16.35 Hz
         
         # Only process frequencies above 80Hz to avoid octave errors
         for i, freq in enumerate(freqs):
             if freq > 80 and freq < 8000:  # Focus on musical range
-                # Map frequency to MIDI pitch
-                midi_pitch = 69 + 12 * np.log2(freq / A4)
-                
-                # Get chroma bin (0-11)
-                chroma_bin = int(round(midi_pitch) % 12)
-                
-                # Weight by magnitude
-                chroma[chroma_bin] += fft_data[i]
+                # Map frequency to pitch class with sub-semitone precision
+                if freq > 0:
+                    # Calculate pitch relative to C0
+                    pitch = 12 * np.log2(freq / C0)
+                    
+                    # Get fractional chroma bin
+                    chroma_bin_float = pitch % 12
+                    
+                    # Distribute energy to adjacent bins for sub-semitone accuracy
+                    lower_bin = int(np.floor(chroma_bin_float)) % 12
+                    upper_bin = int(np.ceil(chroma_bin_float)) % 12
+                    fraction = chroma_bin_float - lower_bin
+                    
+                    # Weight by magnitude
+                    magnitude = fft_data[i]
+                    chroma[lower_bin] += magnitude * (1 - fraction)
+                    if upper_bin != lower_bin:
+                        chroma[upper_bin] += magnitude * fraction
         
         # Normalize to sum to 1
         chroma_sum = np.sum(chroma)

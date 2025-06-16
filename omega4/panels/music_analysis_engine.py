@@ -321,14 +321,25 @@ class MusicAnalysisEngine:
             stability = self._calculate_temporal_stability()
             base_confidence += stability * 0.1
             
-        # Apply non-linear scaling to avoid getting stuck at 54%
-        # This helps spread the confidence range
-        if base_confidence < 0.3:
-            base_confidence = base_confidence * 0.8
-        elif base_confidence > 0.7:
-            base_confidence = 0.7 + (base_confidence - 0.7) * 1.2
+        # Apply non-linear scaling to spread confidence range dynamically
+        # Use a sigmoid-like function to expand the middle range
+        if base_confidence < 0.2:
+            # Very low confidence - reduce further
+            final_confidence = base_confidence * 0.5
+        elif base_confidence < 0.4:
+            # Low confidence - slight reduction
+            final_confidence = 0.1 + (base_confidence - 0.2) * 1.5
+        elif base_confidence < 0.6:
+            # Medium confidence - expand this range
+            final_confidence = 0.4 + (base_confidence - 0.4) * 2.0
+        elif base_confidence < 0.8:
+            # High confidence - expand upward
+            final_confidence = 0.8 + (base_confidence - 0.6) * 0.6
+        else:
+            # Very high confidence
+            final_confidence = 0.92 + (base_confidence - 0.8) * 0.4
             
-        return min(1.0, base_confidence)
+        return min(1.0, max(0.0, final_confidence))
     
     def _check_genre_harmonic_consistency(self, harmonic: Dict[str, Any], 
                                          genre: Dict[str, Any]) -> float:
@@ -540,12 +551,20 @@ class MusicAnalysisEngine:
         """Calculate overall harmonic complexity score"""
         complexity = 0.0
         
-        # Factors contributing to complexity
-        complexity += features['pitch_class_entropy'] / 3.5  # Normalized entropy
-        complexity += features['chord_complexity'] / 5.0     # Normalized chord complexity
-        complexity += features['harmonic_change_rate']       # Already normalized
+        # Factors contributing to complexity with dynamic ranges
+        # Entropy typically ranges from 0-3.5, normalize dynamically
+        entropy = features.get('pitch_class_entropy', 0)
+        complexity += min(1.0, entropy / 2.5)  # More realistic range
         
-        return min(1.0, complexity / 3.0)
+        # Chord complexity ranges from 0-4 typically
+        chord_comp = features.get('chord_complexity', 0)
+        complexity += min(1.0, chord_comp / 3.0)
+        
+        # Harmonic change rate already normalized 0-1
+        complexity += features.get('harmonic_change_rate', 0)
+        
+        # Average the three components
+        return complexity / 3.0
     
     def _calculate_temporal_stability(self) -> float:
         """Calculate stability of analysis over time"""

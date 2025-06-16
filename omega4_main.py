@@ -933,8 +933,27 @@ class ProfessionalLiveAudioAnalyzer:
         
         # Update integrated music panel if active
         if self.show_integrated_music and not self.frozen_integrated_music and self.adaptive_updater.should_update('integrated_music'):
+            # Get raw audio data for music analysis
+            # Use the original audio data before any processing
+            raw_audio = audio_data.copy()
+            
+            # Compute dedicated FFT for music analysis with raw data
+            analysis_fft_size = 4096  # Fixed size for consistency
+            if len(raw_audio) < analysis_fft_size:
+                analysis_audio = np.pad(raw_audio, (0, analysis_fft_size - len(raw_audio)), mode='constant')
+            else:
+                analysis_audio = raw_audio[-analysis_fft_size:]
+            
+            # Apply window and compute FFT on raw audio
+            analysis_window = np.hanning(len(analysis_audio))
+            analysis_windowed = analysis_audio * analysis_window
+            analysis_fft = np.fft.rfft(analysis_windowed)
+            analysis_magnitude = np.abs(analysis_fft)
+            analysis_frequencies = np.fft.rfftfreq(len(analysis_windowed), 1.0 / SAMPLE_RATE)
+            
+            # Update panel with clean, unprocessed FFT data
             self.integrated_music_panel.update(
-                spectrum_data['spectrum'], audio_windowed, freq_array,
+                analysis_magnitude, analysis_audio, analysis_frequencies,
                 drum_info, harmonic_info
             )
         
