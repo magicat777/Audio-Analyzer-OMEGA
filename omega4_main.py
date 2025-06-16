@@ -49,6 +49,9 @@ from omega4.panels.pitch_detection_config import get_preset_config
 from omega4.panels.chromagram import ChromagramPanel
 from omega4.panels.genre_classification import GenreClassificationPanel
 from omega4.panels.integrated_music_panel import IntegratedMusicPanel
+from omega4.panels.voice_detection import VoiceDetectionPanel
+from omega4.panels.phase_correlation import PhaseCorrelationPanel
+from omega4.panels.transient_detection import TransientDetectionPanel
 
 # Import optimization modules
 from omega4.optimization.adaptive_updater import AdaptiveUpdater
@@ -125,6 +128,13 @@ class ProfessionalLiveAudioAnalyzer:
         self.chromagram_panel = ChromagramPanel(SAMPLE_RATE)
         self.genre_classification_panel = GenreClassificationPanel(SAMPLE_RATE)
         self.integrated_music_panel = IntegratedMusicPanel(SAMPLE_RATE)
+        
+        # New visualization panels
+        self.voice_detection_panel = VoiceDetectionPanel(SAMPLE_RATE)
+        self.phase_correlation_panel = PhaseCorrelationPanel(SAMPLE_RATE)
+        self.transient_detection_panel = TransientDetectionPanel(SAMPLE_RATE)
+        
+        # Analyzers (keep existing ones)
         self.phase_analyzer = PhaseCoherenceAnalyzer(SAMPLE_RATE)
         self.transient_analyzer = TransientAnalyzer(SAMPLE_RATE)
         self.room_analyzer = RoomModeAnalyzer(SAMPLE_RATE)
@@ -244,6 +254,22 @@ class ProfessionalLiveAudioAnalyzer:
             'small': self.font_small,
             'tiny': self.font_tiny
         })
+        
+        self.voice_detection_panel.set_fonts({
+            'medium': self.font_medium,
+            'small': self.font_small,
+            'tiny': self.font_tiny
+        })
+        
+        self.phase_correlation_panel.set_fonts({
+            'small': self.font_small,
+            'tiny': self.font_tiny
+        })
+        
+        self.transient_detection_panel.set_fonts({
+            'small': self.font_small,
+            'tiny': self.font_tiny
+        })
 
         # Professional UI panels - All visible by default
         self.show_meters = True
@@ -256,13 +282,13 @@ class ProfessionalLiveAudioAnalyzer:
         self.show_genre_classification = False  # Disabled - using integrated panel instead
         self.show_integrated_music = True  # Integrated music analysis panel (preferred)
         self.show_debug = False  # Debug snapshots triggered by 'D' key
-        self.show_voice_detection = False
+        self.show_voice_detection = True  # Now enabled with proper panel
         self.show_formant = False
         self.show_advanced_voice = False
         self.show_fps = True
         self.show_stats = True
-        self.show_phase = False
-        self.show_transient = False
+        self.show_phase = True  # Now enabled with proper panel
+        self.show_transient = True  # Now enabled with proper panel
         self.show_grid = True
         
         # Frozen/paused states for panels (when True, panel doesn't update)
@@ -275,6 +301,9 @@ class ProfessionalLiveAudioAnalyzer:
         self.frozen_chromagram = False  # Not used - integrated panel preferred
         self.frozen_genre_classification = False  # Not used - integrated panel preferred
         self.frozen_integrated_music = False
+        self.frozen_voice_detection = False
+        self.frozen_phase_correlation = False
+        self.frozen_transient_detection = False
         self.fullscreen = False
         self.test_mode = False  # Auto-test all panels
 
@@ -957,6 +986,22 @@ class ProfessionalLiveAudioAnalyzer:
                 drum_info, harmonic_info
             )
         
+        # Update voice detection panel
+        if self.show_voice_detection and not self.frozen_voice_detection:
+            self.voice_detection_panel.update(audio_windowed, spectrum_data['spectrum'])
+            # Get voice status for other uses
+            voice_status = self.voice_detection_panel.get_status()
+            self.voice_active = voice_status['active']
+            self.voice_confidence = voice_status['confidence']
+        
+        # Update phase correlation panel (simulated stereo for now)
+        if self.show_phase and not self.frozen_phase_correlation:
+            self.phase_correlation_panel.update(audio_windowed, spectrum_data['spectrum'])
+        
+        # Update transient detection panel
+        if self.show_transient and not self.frozen_transient_detection:
+            self.transient_detection_panel.update(audio_windowed, spectrum_data['spectrum'])
+        
         # Phase coherence analysis
         phase_coherence = self.phase_analyzer.analyze_mono(spectrum_data['fft_complex'])
         spectrum_data['phase_coherence'] = phase_coherence
@@ -1172,6 +1217,12 @@ class ProfessionalLiveAudioAnalyzer:
             print(f"VU Meters: {'FROZEN' if self.frozen_vu_meters else 'ACTIVE'}")
         elif event.key == pygame.K_v:
             self.show_voice_detection = not self.show_voice_detection
+        elif event.key == pygame.K_y:
+            self.show_phase = not self.show_phase
+            print(f"Phase Correlation: {'ON' if self.show_phase else 'OFF'}")
+        elif event.key == pygame.K_x:
+            self.show_transient = not self.show_transient
+            print(f"Transient Detection: {'ON' if self.show_transient else 'OFF'}")
         elif event.key == pygame.K_f:
             self.show_formant = not self.show_formant
         elif event.key == pygame.K_a:
@@ -1604,6 +1655,7 @@ class ProfessionalLiveAudioAnalyzer:
                 ("Professional Meters (M)", self.show_meters),
                 ("Bass Zoom (Z)", self.show_bass_zoom),
                 ("Grid Display (G)", self.show_grid),
+                ("Phase Correlation (Y)", self.show_phase),
             ],
             # Column 2
             [
@@ -1611,6 +1663,7 @@ class ProfessionalLiveAudioAnalyzer:
                 ("Pitch Detection (P)", self.show_pitch_detection),
                 # ("Chromagram (C)", self.show_chromagram),  # Part of integrated panel
                 ("Room Analysis (R)", self.show_room_analysis),
+                ("Transient Detection (X)", self.show_transient),
             ],
             # Column 3
             [
@@ -2032,6 +2085,12 @@ class ProfessionalLiveAudioAnalyzer:
                     active_panels.append(('room', None))  # Special case - drawn manually
                 if self.show_integrated_music:
                     active_panels.append(('integrated', self.integrated_music_panel))
+                if self.show_voice_detection:
+                    active_panels.append(('voice', self.voice_detection_panel))
+                if self.show_phase:
+                    active_panels.append(('phase', self.phase_correlation_panel))
+                if self.show_transient:
+                    active_panels.append(('transient', self.transient_detection_panel))
                 
                 # Calculate grid positions
                 if active_panels:
@@ -2079,6 +2138,12 @@ class ProfessionalLiveAudioAnalyzer:
                             # Increase height for integrated panel to fit all content including hip-hop features
                             # Base height + genre/harmony sections + hip-hop + cross-analysis + chromagram + confidence graph
                             actual_panel_height = panel_height + 120  # 380px total to fit all content
+                        elif panel_type == 'voice':
+                            actual_panel_height = 180  # Voice detection panel fixed height
+                        elif panel_type == 'phase':
+                            actual_panel_height = 200  # Phase correlation panel fixed height
+                        elif panel_type == 'transient':
+                            actual_panel_height = 160  # Transient detection panel fixed height
                         
                         # Handle room panel specially
                         if panel_type == 'room':
@@ -2113,7 +2178,12 @@ class ProfessionalLiveAudioAnalyzer:
                                 y_pos += 25
                         else:
                             # Regular panel
-                            panel.draw(self.screen, panel_x, panel_y, actual_panel_width, actual_panel_height, ui_scale)
+                            # Check if panel accepts ui_scale parameter
+                            if panel_type in ['voice', 'phase', 'transient']:
+                                # New panels don't have ui_scale parameter yet
+                                panel.draw(self.screen, panel_x, panel_y, actual_panel_width)
+                            else:
+                                panel.draw(self.screen, panel_x, panel_y, actual_panel_width, actual_panel_height, ui_scale)
                         
                         # Draw frozen indicator if panel is frozen
                         frozen_state = False
@@ -2130,6 +2200,12 @@ class ProfessionalLiveAudioAnalyzer:
                         elif panel_type == 'integrated' and self.frozen_integrated_music:
                             frozen_state = True
                         elif panel_type == 'room' and self.frozen_room_analysis:
+                            frozen_state = True
+                        elif panel_type == 'voice' and self.frozen_voice_detection:
+                            frozen_state = True
+                        elif panel_type == 'phase' and self.frozen_phase_correlation:
+                            frozen_state = True
+                        elif panel_type == 'transient' and self.frozen_transient_detection:
                             frozen_state = True
                         
                         if frozen_state:
