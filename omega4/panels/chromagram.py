@@ -347,10 +347,17 @@ class ChromagramAnalyzer:
         return 0.0
     
     def get_most_likely_key(self) -> Tuple[str, float]:
-        """Get the most likely key based on recent history"""
+        """Get the most likely key based on recent history and chord progression"""
         if not self.key_history:
             return "Unknown", 0.0
-            
+        
+        # If we have recent chord progression, use it to inform key detection
+        if len(self.chord_history) >= 4:
+            chord_based_key = self._detect_key_from_chords()
+            if chord_based_key and chord_based_key != "Unknown":
+                # Add chord-based key to history with high confidence
+                self.key_history.append((chord_based_key, 0.85))
+        
         # Weight recent detections more heavily
         weighted_keys = {}
         for i, (key, correlation) in enumerate(self.key_history):
@@ -358,13 +365,24 @@ class ChromagramAnalyzer:
             if key not in weighted_keys:
                 weighted_keys[key] = 0
             weighted_keys[key] += correlation * weight
-            
-        # Find key with highest weighted score
-        best_key = max(weighted_keys, key=weighted_keys.get)
-        total_weight = sum(weighted_keys.values())
-        confidence = weighted_keys[best_key] / total_weight if total_weight > 0 else 0.0
         
-        return best_key, confidence
+        # Find key with highest weighted score
+        if weighted_keys:
+            best_key = max(weighted_keys, key=weighted_keys.get)
+            total_weight = sum(weighted_keys.values())
+            confidence = weighted_keys[best_key] / total_weight if total_weight > 0 else 0.0
+            
+            # Require minimum confidence to avoid defaulting to C Major
+            if confidence < 0.3:
+                # Try to use chord context
+                chord_key = self._detect_key_from_chords()
+                if chord_key and chord_key != "Unknown":
+                    return chord_key, 0.6
+                return "Unknown", confidence
+            
+            return best_key, confidence
+        else:
+            return "Unknown", 0.0
     
     def get_alternative_keys(self, chroma: np.ndarray, top_n: int = 3) -> List[Tuple[str, float]]:
         """Get top N alternative key possibilities"""
@@ -389,6 +407,82 @@ class ChromagramAnalyzer:
         # Sort by correlation and return top N
         key_scores.sort(key=lambda x: x[1], reverse=True)
         return key_scores[:top_n]
+    
+    def _detect_key_from_chords(self) -> Optional[str]:
+        """Detect key based on recent chord progression"""
+        if len(self.chord_history) < 4:
+            return None
+        
+        # Get recent chords (ignore N/A)
+        recent_chords = [c for c in list(self.chord_history)[-12:] if c != 'N/A']
+        if len(recent_chords) < 3:
+            return None
+        
+        # Count chord roots and types
+        chord_roots = {}
+        has_major = False
+        has_minor = False
+        
+        for chord in recent_chords:
+            # Parse chord name
+            if len(chord) >= 2:
+                if chord[1] == '#' or chord[1] == 'b':
+                    root = chord[:2]
+                    chord_type = chord[2:]
+                else:
+                    root = chord[0]
+                    chord_type = chord[1:]
+                
+                # Count roots
+                if root not in chord_roots:
+                    chord_roots[root] = 0
+                chord_roots[root] += 1
+                
+                # Check types
+                if 'maj' in chord_type.lower() or (chord_type == '' or chord_type == '5'):
+                    has_major = True
+                elif 'min' in chord_type.lower() or 'm' in chord_type:
+                    has_minor = True
+        
+        if not chord_roots:
+            return None
+        
+        # Find most common root
+        most_common_root = max(chord_roots, key=chord_roots.get)
+        
+        # Simple heuristic: if F# appears frequently with D, likely D Major
+        if 'F#' in chord_roots and 'D' in chord_roots:
+            if chord_roots['F#'] > 0 and chord_roots['D'] > 0:
+                return 'D Major'
+        
+        # If C# appears with A, likely A Major
+        if 'C#' in chord_roots and 'A' in chord_roots:
+            if chord_roots['C#'] > 0 and chord_roots['A'] > 0:
+                return 'A Major'
+        
+        # If the most common root appears with its fifth, it's likely the key
+        fifth_map = {
+            'C': 'G', 'C#': 'G#', 'D': 'A', 'D#': 'A#', 'E': 'B', 'F': 'C',
+            'F#': 'C#', 'G': 'D', 'G#': 'D#', 'A': 'E', 'A#': 'F', 'B': 'F#'
+        }
+        
+        if most_common_root in fifth_map:
+            fifth = fifth_map[most_common_root]
+            if fifth in chord_roots and chord_roots[fifth] > 0:
+                # Likely tonic-dominant relationship
+                if has_major:
+                    return f"{most_common_root} Major"
+                elif has_minor:
+                    return f"{most_common_root} Minor"
+        
+        # Default: use most common root
+        if chord_roots[most_common_root] >= 3:  # Appears at least 3 times
+            if has_minor and not has_major:
+                return f"{most_common_root} Minor"
+            else:
+                return f"{most_common_root} Major"
+        
+        return None
     
     def _detect_metal_riff_pattern(self, chroma: np.ndarray, debug_enabled: bool = False) -> Optional[str]:
         """Detect specific metal riff patterns like D5-E5 alternation
@@ -955,6 +1049,17 @@ class ChromagramPanel:
             
             # Detect key
             key, correlation = self.analyzer.detect_key(chromagram)
+            
+            # Debug key detection
+            if debug_enabled and hasattr(self, '_debug_key_counter'):
+                self._debug_key_counter += 1
+                if self._debug_key_counter % 120 == 0:  # Every 2 seconds
+                    print(f"\n[Key Detection] Current: {key} (confidence: {correlation:.2f})")
+                    if hasattr(self.analyzer, 'chord_history') and len(self.analyzer.chord_history) > 0:
+                        recent_chords = list(self.analyzer.chord_history)[-8:]
+                        print(f"[Key Detection] Recent chords: {' - '.join(recent_chords)}")
+            elif debug_enabled:
+                self._debug_key_counter = 0
             
             # Detect current chord
             chord, chord_conf = self.analyzer.detect_chord(chromagram, debug_enabled=debug_enabled)
