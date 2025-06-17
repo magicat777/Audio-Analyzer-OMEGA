@@ -962,24 +962,23 @@ class GenreClassificationPanel:
     
     def draw(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float = 1.0):
         """Draw genre classification information"""
-        # Semi-transparent background
-        overlay = pygame.Surface((width, height))
-        overlay.set_alpha(230)
-        overlay.fill((40, 30, 25))
-        screen.blit(overlay, (x, y))
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
         
-        # Border
-        pygame.draw.rect(
-            screen, (160, 120, 80), (x, y, width, height), 2
-        )
+        # Draw background with brown tint
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=(40, 30, 25), border_color=(160, 120, 80), alpha=230)
         
-        y_offset = y + int(20 * ui_scale)
-        
-        # Title
+        # Draw centered header
         if self.font_medium:
-            title_text = self.font_medium.render("OMEGA-2 Genre Classification", True, (255, 220, 180))
-            screen.blit(title_text, (x + int(20 * ui_scale), y_offset))
-            y_offset += int(35 * ui_scale)
+            y_offset = draw_panel_header(screen, "Genre Classification", self.font_medium,
+                                       x, y, width, bg_color=(40, 30, 25),
+                                       border_color=(160, 120, 80),
+                                       text_color=(255, 220, 180))
+        else:
+            y_offset = y + 35
+        
+        y_offset += int(10 * ui_scale)  # Small gap after header
         
         # Get genre data
         top_genre = self.genre_info.get('top_genre', 'Unknown')

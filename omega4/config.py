@@ -12,7 +12,7 @@ MAX_FREQ = 20000
 FFT_SIZE_BASE = 4096  # Reduced from 8192 for better latency (85ms window vs 170ms)
 
 # Display Configuration
-DEFAULT_WIDTH = 1800
+DEFAULT_WIDTH = 1850  # 4 panels * 440 + padding (adjusted for 4 panels wide)
 DEFAULT_HEIGHT = 1900  # Adjusted to fit all panels (2 rows of 4 panels max) when visible by default
 TARGET_FPS = 60
 

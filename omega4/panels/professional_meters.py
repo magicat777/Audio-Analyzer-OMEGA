@@ -393,33 +393,38 @@ class ProfessionalMetersPanel:
         """Draw the professional meters panel"""
         if not hasattr(self, 'lufs_info'):
             return
-            
-        # Semi-transparent background
-        panel_bg = pygame.Surface((width, height))
-        panel_bg.set_alpha(240)
-        panel_bg.fill((25, 30, 40))
-        screen.blit(panel_bg, (x, y))
         
-        # Border
-        pygame.draw.rect(screen, (80, 90, 110), (x, y, width, height), 2)
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
         
-        # Title with weighting mode
+        # Draw background
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=(25, 30, 40), border_color=(80, 90, 110))
+        
+        # Draw centered header
         if self.font_medium:
-            title_y = y + int(10 * ui_scale)
-            weighting_mode = self.metering.weighting_mode
-            title_text = f"Professional Meters ({weighting_mode}-weighted)"
-            title = self.font_medium.render(title_text, True, (180, 190, 200))
-            screen.blit(title, (x + int(10 * ui_scale), title_y))
+            title_y = draw_panel_header(screen, "Professional Meters", self.font_medium,
+                                      x, y, width, bg_color=(25, 30, 40),
+                                      border_color=(80, 90, 110),
+                                      text_color=(180, 190, 200))
+        else:
+            title_y = y + 35
             
-            # Gating indicator
-            if self.font_small:
-                gating_text = "GATED" if self.use_gated_measurement else "UNGATED"
-                gating_color = (100, 200, 100) if self.use_gated_measurement else (200, 200, 100)
-                gating_surf = self.font_small.render(gating_text, True, gating_color)
-                screen.blit(gating_surf, (x + width - 80, title_y + 5))
+        # Weighting mode and gating indicator below header
+        if self.font_small:
+            info_y = title_y + 5
+            weighting_mode = self.metering.weighting_mode
+            mode_text = f"{weighting_mode}-weighted"
+            mode_surf = self.font_small.render(mode_text, True, (150, 160, 170))
+            screen.blit(mode_surf, (x + 10, info_y))
+            
+            gating_text = "GATED" if self.use_gated_measurement else "UNGATED"
+            gating_color = (100, 200, 100) if self.use_gated_measurement else (200, 200, 100)
+            gating_surf = self.font_small.render(gating_text, True, gating_color)
+            screen.blit(gating_surf, (x + width - 80, info_y))
             
             # Meters
-            current_y = title_y + int(40 * ui_scale)
+            current_y = info_y + int(25 * ui_scale)
             spacing = int(25 * ui_scale)
             
             # LUFS Meters with peak hold

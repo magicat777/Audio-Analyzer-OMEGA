@@ -384,12 +384,11 @@ class BeatDetectionPanel:
     
     def draw(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float = 1.0):
         """Draw beat detection panel"""
-        # Background
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
+        
+        # Background with beat-sensitive color
         bg_color = (30, 20, 40) if not self.beat_info['is_beat'] else (60, 40, 80)
-        overlay = pygame.Surface((width, height))
-        overlay.set_alpha(240)
-        overlay.fill(bg_color)
-        screen.blit(overlay, (x, y))
         
         # Border with beat flash
         border_color = (100, 70, 130)
@@ -401,16 +400,21 @@ class BeatDetectionPanel:
                 int(130 + 125 * flash_intensity)
             )
         
-        pygame.draw.rect(screen, border_color, (x, y, width, height), 2)
+        # Draw background
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=bg_color, border_color=border_color)
         
-        y_offset = y + int(15 * ui_scale)
-        
-        # Title
+        # Draw centered header
         if self.font_medium:
             title_color = (255, 200, 255) if self.beat_flash_time > 0 else (200, 150, 200)
-            title_text = self.font_medium.render("Beat Detection & BPM", True, title_color)
-            screen.blit(title_text, (x + int(15 * ui_scale), y_offset))
-            y_offset += int(35 * ui_scale)
+            y_offset = draw_panel_header(screen, "Beat Detection & BPM", self.font_medium,
+                                       x, y, width, bg_color=bg_color,
+                                       border_color=border_color,
+                                       text_color=title_color)
+        else:
+            y_offset = y + 35
+        
+        y_offset += int(10 * ui_scale)  # Small gap after header
         
         # Current BPM
         if self.font_large:

@@ -258,27 +258,26 @@ class TransientDetectionPanel:
         if not self.fonts:
             return
         
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
+        
         # Use provided height or default
         if height is None:
             height = self.panel_height
             
-        # Semi-transparent background (matching genre classification style)
-        overlay = pygame.Surface((width, height))
-        overlay.set_alpha(230)
-        overlay.fill((25, 30, 40))  # Blue tint for transient theme
-        screen.blit(overlay, (x, y))
+        # Draw background with blue tint
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=(25, 30, 40), border_color=(80, 120, 160), alpha=230)
         
-        # Border
-        pygame.draw.rect(screen, (80, 120, 160), (x, y, width, height), 2)
+        # Draw centered header
+        font_medium = self.fonts.get('medium', self.fonts['small'])
+        y_offset = draw_panel_header(screen, "Transient Detection", font_medium,
+                                   x, y, width, bg_color=(25, 30, 40),
+                                   border_color=(80, 120, 160),
+                                   text_color=(180, 220, 255),
+                                   frozen=self.is_frozen)
         
-        # Title with increased padding (matching genre classification)
-        y_offset = y + 20
-        title = "Transient Detection"
-        if self.is_frozen:
-            title += " [FROZEN]"
-        title_surface = self.fonts.get('medium', self.fonts['small']).render(title, True, (180, 220, 255))
-        screen.blit(title_surface, (x + 20, y_offset))
-        y_offset += 35
+        y_offset += 10  # Small gap after header
         
         # Transient indicator with detection type
         if self.transient_detected:

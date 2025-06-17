@@ -196,24 +196,26 @@ class VoiceDetectionPanel:
         if not self.fonts:
             return
         
-        # Panel background
-        if panel_color is None:
-            panel_color = self.bg_color
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
         
-        panel_rect = pygame.Rect(x, y, width, self.panel_height)
-        pygame.draw.rect(screen, panel_color, panel_rect)
-        pygame.draw.rect(screen, (100, 100, 100), panel_rect, 1)
+        # Calculate height based on standardized dimensions
+        height = self.panel_height
         
-        # Title
-        title = "Voice Detection"
-        if self.is_frozen:
-            title += " [FROZEN]"
-        title_surface = self.fonts['small'].render(title, True, (255, 255, 255))
-        screen.blit(title_surface, (x + 10, y + 5))
+        # Draw background
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=(15, 18, 20), border_color=(100, 100, 100))
+        
+        # Draw centered header
+        font_medium = self.fonts.get('medium', self.fonts['small'])
+        current_y = draw_panel_header(screen, "Voice Detection", font_medium,
+                                    x, y, width, frozen=self.is_frozen)
+        
+        current_y += 5  # Small gap after header
         
         # Voice activity indicator
         indicator_x = x + width - 100
-        indicator_y = y + 5
+        indicator_y = current_y
         indicator_color = self.voice_color if self.voice_active else (50, 50, 50)
         pygame.draw.circle(screen, indicator_color, (indicator_x, indicator_y + 8), 6)
         
@@ -223,14 +225,18 @@ class VoiceDetectionPanel:
             screen.blit(conf_surface, (indicator_x + 10, indicator_y))
         
         # Voice type and pitch
-        info_y = y + 30
+        info_y = current_y + 25
         if self.voice_active and self.voice_pitch > 0:
             info_text = f"{self.voice_type} - {self.voice_pitch:.0f} Hz"
             info_surface = self.fonts['small'].render(info_text, True, (200, 200, 200))
             screen.blit(info_surface, (x + 10, info_y))
+        else:
+            info_text = "No voice detected"
+            info_surface = self.fonts['small'].render(info_text, True, (100, 100, 100))
+            screen.blit(info_surface, (x + 10, info_y))
         
         # Confidence history graph
-        graph_y = y + 55
+        graph_y = info_y + 25
         graph_height = 40
         graph_width = width - 20
         
@@ -250,33 +256,45 @@ class VoiceDetectionPanel:
             if len(points) > 1:
                 pygame.draw.lines(screen, self.voice_color, False, points, 2)
         
-        # Formant display
-        formant_y = y + 105
-        if self.voice_active and len(self.formants) > 0:
-            formant_text = "Formants:"
-            text_surface = self.fonts['tiny'].render(formant_text, True, (150, 150, 150))
-            screen.blit(text_surface, (x + 10, formant_y))
-            
-            # Draw formant frequencies
-            formant_x = x + 80
-            for i, (formant, color) in enumerate(zip(self.formants, self.formant_colors)):
-                f_text = f"F{i+1}: {formant:.0f}Hz"
-                f_surface = self.fonts['tiny'].render(f_text, True, color)
-                screen.blit(f_surface, (formant_x + i * 100, formant_y))
+        # Formant display (always show labels)
+        formant_y = graph_y + graph_height + 10
+        formant_text = "Formants:"
+        text_surface = self.fonts['tiny'].render(formant_text, True, (150, 150, 150))
+        screen.blit(text_surface, (x + 10, formant_y))
         
-        # Vocal quality indicators
-        quality_y = y + 130
-        if self.voice_active:
-            # Simple quality visualization
-            quality_width = int(self.vocal_quality * 200)
-            quality_rect = pygame.Rect(x + 10, quality_y, quality_width, 10)
-            pygame.draw.rect(screen, (100, 200, 100), quality_rect)
-            pygame.draw.rect(screen, (60, 60, 60), 
-                           pygame.Rect(x + 10, quality_y, 200, 10), 1)
+        # Always draw formant labels (F1-F4)
+        formant_x = x + 80
+        for i in range(4):  # Always show F1-F4
+            if self.voice_active and i < len(self.formants):
+                # Show actual formant value with color
+                f_text = f"F{i+1}: {self.formants[i]:.0f}Hz"
+                color = self.formant_colors[i] if i < len(self.formant_colors) else (150, 150, 150)
+            else:
+                # Show placeholder
+                f_text = f"F{i+1}: --"
+                color = (100, 100, 100)
             
-            quality_text = "Vocal Clarity"
-            text_surface = self.fonts['tiny'].render(quality_text, True, (150, 150, 150))
-            screen.blit(text_surface, (x + 10, quality_y - 15))
+            f_surface = self.fonts['tiny'].render(f_text, True, color)
+            screen.blit(f_surface, (formant_x + i * 100, formant_y))
+        
+        # Vocal quality indicators (always show)
+        quality_y = formant_y + 25
+        
+        # Always show label
+        quality_text = "Vocal Clarity"
+        text_surface = self.fonts['tiny'].render(quality_text, True, (150, 150, 150))
+        screen.blit(text_surface, (x + 10, quality_y - 15))
+        
+        # Always show outline
+        pygame.draw.rect(screen, (60, 60, 60), 
+                       pygame.Rect(x + 10, quality_y, 200, 10), 1)
+        
+        # Fill bar if voice is active
+        if self.voice_active:
+            quality_width = int(self.vocal_quality * 200)
+            if quality_width > 0:
+                quality_rect = pygame.Rect(x + 10, quality_y, quality_width, 10)
+                pygame.draw.rect(screen, (100, 200, 100), quality_rect)
     
     def get_status(self):
         """Get current voice detection status"""

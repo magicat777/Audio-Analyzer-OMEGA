@@ -27,6 +27,7 @@ from typing import Dict, List, Tuple, Any
 import argparse
 from scipy import signal as scipy_signal
 from math import inf
+import datetime
 
 # Import configuration
 from omega4.config import (
@@ -1362,6 +1363,146 @@ class ProfessionalLiveAudioAnalyzer:
         
         self.panel_test_counter += 1
     
+    def export_debug_to_file(self, spectrum_data=None):
+        """Export comprehensive debug information to a timestamped file"""
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"omega4_debug_{timestamp}.txt"
+        
+        with open(filename, 'w') as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"OMEGA-4 Professional Audio Analyzer Debug Export\n")
+            f.write(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            # System information
+            f.write("SYSTEM INFORMATION:\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"Window size: {self.width}x{self.height}\n")
+            f.write(f"Sample rate: {self.sample_rate} Hz\n")
+            f.write(f"FFT size: {self.fft_size}\n")
+            f.write(f"Frequency bars: {self.bars}\n")
+            f.write(f"Input gain: {self.input_gain:.2f}x ({20*np.log10(self.input_gain):.1f}dB)\n")
+            f.write(f"Performance mode: {'ON' if self.performance_mode else 'OFF'}\n")
+            f.write(f"GPU acceleration: {'Available' if hasattr(self, 'gpu_fft') else 'Not available'}\n")
+            f.write("\n")
+            
+            # Panel status
+            f.write("PANEL STATUS:\n")
+            f.write("-" * 40 + "\n")
+            panels = [
+                ('Professional Meters', self.professional_meters),
+                ('VU Meters', self.vu_meters if hasattr(self, 'vu_meters') else None),
+                ('Bass Zoom', self.bass_zoom),
+                ('Harmonic Analysis', self.harmonic_analysis),
+                ('Pitch Detection', self.pitch_detection),
+                ('Chromagram', self.chromagram),
+                ('Genre Classification', self.genre_classification),
+                ('Voice Detection', self.voice_detection),
+                ('Phase Correlation', self.phase_correlation),
+                ('Transient Detection', self.transient_detection),
+                ('Performance Profiler', self.performance_profiler)
+            ]
+            
+            for name, panel in panels:
+                if panel and hasattr(panel, 'visible'):
+                    status = "Visible" if panel.visible else "Hidden"
+                    if hasattr(panel, 'is_frozen'):
+                        if panel.is_frozen:
+                            status += " (FROZEN)"
+                    f.write(f"{name}: {status}\n")
+            f.write("\n")
+            
+            # Audio analysis data
+            if spectrum_data is not None:
+                f.write("AUDIO ANALYSIS:\n")
+                f.write("-" * 40 + "\n")
+                
+                # Peak frequency
+                peak_idx = np.argmax(spectrum_data)
+                peak_freq = self.freqs[peak_idx] if peak_idx < len(self.freqs) else 0
+                peak_db = 20 * np.log10(max(spectrum_data[peak_idx], 1e-10))
+                f.write(f"Peak frequency: {peak_freq:.1f} Hz at {peak_db:.1f} dB\n")
+                
+                # RMS level
+                if hasattr(self, 'last_audio_chunk') and self.last_audio_chunk is not None:
+                    rms = np.sqrt(np.mean(self.last_audio_chunk ** 2))
+                    rms_db = 20 * np.log10(max(rms, 1e-10))
+                    f.write(f"RMS level: {rms_db:.1f} dB\n")
+                
+                # Genre detection
+                if hasattr(self.genre_classification, 'current_genre'):
+                    f.write(f"Detected genre: {self.genre_classification.current_genre}\n")
+                    if hasattr(self.genre_classification, 'genre_confidence'):
+                        f.write(f"Genre confidence: {self.genre_classification.genre_confidence:.1%}\n")
+                
+                # Key detection
+                if hasattr(self.chromagram, 'detected_key'):
+                    f.write(f"Detected key: {self.chromagram.detected_key}\n")
+                    f.write(f"Key confidence: {self.chromagram.key_confidence:.1%}\n")
+                    f.write(f"Current chord: {self.chromagram.current_chord}\n")
+                    if hasattr(self.chromagram, 'chord_sequence') and self.chromagram.chord_sequence:
+                        f.write(f"Chord progression: {' - '.join(self.chromagram.chord_sequence[-8:])}\n")
+                
+                # Voice detection
+                if hasattr(self.voice_detection, 'voice_detected'):
+                    f.write(f"Voice detected: {'Yes' if self.voice_detection.voice_detected else 'No'}\n")
+                    if self.voice_detection.voice_detected and hasattr(self.voice_detection, 'voice_confidence'):
+                        f.write(f"Voice confidence: {self.voice_detection.voice_confidence:.1%}\n")
+                
+                f.write("\n")
+            
+            # Detailed panel information
+            f.write("DETAILED PANEL INFORMATION:\n")
+            f.write("=" * 60 + "\n")
+            
+            # Chromagram details
+            if self.chromagram and self.chromagram.visible:
+                f.write("\nCHROMAGRAM PANEL:\n")
+                f.write("-" * 40 + "\n")
+                if hasattr(self.chromagram, 'chromagram'):
+                    chroma = self.chromagram.chromagram
+                    f.write("Chromagram values:\n")
+                    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+                    for i, val in enumerate(chroma):
+                        if val > 0.05:  # Only show significant values
+                            f.write(f"  {note_names[i]}: {val:.3f}\n")
+                    
+                    # Check for drop tuning
+                    if hasattr(self.chromagram.analyzer, 'transposition_offset'):
+                        offset = self.chromagram.analyzer.transposition_offset
+                        if offset != 0:
+                            f.write(f"Drop tuning detected: {offset} semitones\n")
+            
+            # Bass detail
+            if self.bass_zoom and self.bass_zoom.visible and hasattr(self.bass_zoom, 'bass_freq_ranges'):
+                f.write("\nBASS DETAIL:\n")
+                f.write("-" * 40 + "\n")
+                bass_results = self.bass_zoom.get_results()
+                for i, (start, end) in enumerate(bass_results['freq_ranges'][:10]):  # First 10 ranges
+                    if i < len(bass_results['bar_values']):
+                        val = bass_results['bar_values'][i]
+                        if val > 0.01:
+                            db = 20 * np.log10(max(val, 1e-10))
+                            f.write(f"  {start:.1f}-{end:.1f} Hz: {db:.1f} dB\n")
+            
+            # Performance metrics
+            if self.performance_profiler and hasattr(self.performance_profiler, 'get_metrics'):
+                f.write("\nPERFORMANCE METRICS:\n")
+                f.write("-" * 40 + "\n")
+                metrics = self.performance_profiler.get_metrics()
+                f.write(f"Current FPS: {metrics.get('fps', 0):.1f}\n")
+                f.write(f"Frame time: {metrics.get('frame_time', 0):.1f} ms\n")
+                f.write(f"CPU usage: {metrics.get('cpu_percent', 0):.1f}%\n")
+                if 'gpu_percent' in metrics:
+                    f.write(f"GPU usage: {metrics['gpu_percent']:.1f}%\n")
+                f.write(f"Memory usage: {metrics.get('memory_mb', 0):.1f} MB\n")
+            
+            f.write("\n" + "=" * 80 + "\n")
+            f.write(f"Debug export saved to: {filename}\n")
+        
+        print(f"Debug information exported to: {filename}")
+        return filename
+    
     def print_panel_debug_info(self):
         """Print debug information for all visible panels"""
         print("\n[ACTIVE PANELS DEBUG INFO]")
@@ -1577,15 +1718,23 @@ class ProfessionalLiveAudioAnalyzer:
         elif event.key == pygame.K_a:
             self.show_advanced_voice = not self.show_advanced_voice
         elif event.key == pygame.K_d:
-            # Toggle debug mode for continuous output
-            self.show_debug = not self.show_debug
-            print(f"Debug mode: {'ON' if self.show_debug else 'OFF'}")
-            
-            # Also print debug snapshot when enabling
-            if self.show_debug and hasattr(self, 'last_spectrum_data'):
-                self.print_debug_snapshot(self.last_spectrum_data)
-                self.print_panel_debug_info()
-                print("Debug snapshot printed to terminal")
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+D = export debug to file
+                if hasattr(self, 'last_spectrum_data'):
+                    filename = self.export_debug_to_file(self.last_spectrum_data)
+                    print(f"Debug information exported to: {filename}")
+                else:
+                    print("No spectrum data available for debug export")
+            else:
+                # D = toggle debug mode for continuous output
+                self.show_debug = not self.show_debug
+                print(f"Debug mode: {'ON' if self.show_debug else 'OFF'}")
+                
+                # Also print debug snapshot when enabling
+                if self.show_debug and hasattr(self, 'last_spectrum_data'):
+                    self.print_debug_snapshot(self.last_spectrum_data)
+                    self.print_panel_debug_info()
+                    print("Debug snapshot printed to terminal")
         elif event.key == pygame.K_k:
             self.adaptive_allocation_enabled = not self.adaptive_allocation_enabled
             print(f"Adaptive frequency allocation: {'ON' if self.adaptive_allocation_enabled else 'OFF'}")
@@ -1804,42 +1953,53 @@ class ProfessionalLiveAudioAnalyzer:
                         print(f"  Type: {t.get('type', 'unknown')}, Time: {t.get('time', 0):.3f}s")
         
         # Bass detail (analyze bass frequencies directly from spectrum)
-        print(f"\n[BASS DETAIL 20-300Hz]")
-        if 'spectrum' in spectrum_data and len(spectrum_data['spectrum']) > 0:
-            freq_bin_width = SAMPLE_RATE / (2 * len(spectrum_data['spectrum']))
-            
-            # Analyze specific bass frequencies
-            bass_freqs = [
-                (40, "Sub-bass"),
-                (60, "Kick"),
-                (80, "Floor tom"),
-                (110, "Bass line"),
-                (160, "Low strings"),
-                (200, "Upper bass")
-            ]
-            
-            for freq, name in bass_freqs:
-                idx = int(freq / freq_bin_width)
-                if idx < len(spectrum_data['spectrum']):
-                    # Get magnitude value (already processed/normalized)
-                    magnitude = spectrum_data['spectrum'][idx]
+        print(f"\n[BASS DETAIL 20-200Hz]")
+        if hasattr(self, 'bass_zoom_panel') and self.bass_zoom_panel.latest_bass_result is not None:
+            # Use the high-resolution bass zoom data instead of main spectrum
+            bass_data = self.bass_zoom_panel.latest_bass_result
+            if 'bass_magnitudes' in bass_data and len(bass_data['bass_magnitudes']) > 0:
+                bass_mags = bass_data['bass_magnitudes']
+                bass_freqs = self.bass_zoom_panel.bass_freq_ranges
+                
+                # Define key bass frequencies to analyze
+                target_freqs = [
+                    (40, "Sub-bass"),
+                    (60, "Kick"),
+                    (80, "Floor tom"),
+                    (110, "Bass line"),
+                    (160, "Low strings"),
+                    (200, "Upper bass")
+                ]
+                
+                for target_freq, name in target_freqs:
+                    # Find the closest frequency range in bass zoom data
+                    closest_idx = -1
+                    closest_diff = float('inf')
                     
-                    # Convert to dB with proper reference
-                    # Use a reference that makes sense for normalized data
-                    if magnitude > 0:
-                        # Add small offset to prevent log(1) = 0
-                        # and scale to more realistic range
-                        db_value = 20 * np.log10(magnitude / 2.0)
-                        # Clamp to reasonable range
-                        db_value = max(-60, min(-3, db_value))  # Never show 0dB
+                    for idx, (f_start, f_end) in enumerate(bass_freqs):
+                        f_center = (f_start + f_end) / 2
+                        diff = abs(f_center - target_freq)
+                        if diff < closest_diff:
+                            closest_diff = diff
+                            closest_idx = idx
+                    
+                    if closest_idx >= 0 and closest_idx < len(bass_mags):
+                        magnitude = bass_mags[closest_idx]
                         
-                        # Create bar visualization
-                        bar_length = int((db_value + 60) / 3)  # Scale from -60dB to 0dB
-                        bar_length = max(0, min(bar_length, 20))
-                        bar = "█" * bar_length
-                        print(f"{name:12} ({freq:3d}Hz): {bar:20} {db_value:+6.1f} dB")
-                    else:
-                        print(f"{name:12} ({freq:3d}Hz): {'':20}  -60.0 dB")
+                        # Convert to dB
+                        if magnitude > 0:
+                            db_value = 20 * np.log10(magnitude + 1e-10)
+                            db_value = max(-60, min(0, db_value))
+                            
+                            # Create bar visualization
+                            bar_length = int((db_value + 60) / 3)
+                            bar_length = max(0, min(bar_length, 20))
+                            bar = "█" * bar_length
+                            print(f"{name:12} ({target_freq:3d}Hz): {bar:20} {db_value:+6.1f} dB")
+                        else:
+                            print(f"{name:12} ({target_freq:3d}Hz): {'':20}  -60.0 dB")
+        else:
+            print("Bass zoom data not available")
         
         # Voice detection
         print(f"\n[VOICE DETECTION]")
@@ -2496,6 +2656,9 @@ def main():
     parser.add_argument(
         "--height", type=int, default=DEFAULT_HEIGHT, help=f"Window height (default: {DEFAULT_HEIGHT})"
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable debug mode at startup"
+    )
 
     args = parser.parse_args()
 
@@ -2532,7 +2695,7 @@ def main():
     print("    Z: Bass zoom (legacy) | R: Room analysis (legacy)")
     print("  ")
     print("  Other Controls:")
-    print("    G: Toggle grid | S: Screenshot | D: Debug snapshot")
+    print("    G: Toggle grid | S: Screenshot | D: Debug mode | Shift+D: Export debug to file")
     print("    K: Adaptive frequency allocation | T: Test mode")
     print("    SPACE: Toggle A/B mode | ↑/↓: Adjust gain")
     print("    1-9: Window size presets | F11: Fullscreen | ESC: Exit")
@@ -2541,6 +2704,11 @@ def main():
     analyzer = ProfessionalLiveAudioAnalyzer(
         width=args.width, height=args.height, bars=args.bars, source_name=args.source
     )
+    
+    # Enable debug mode if requested
+    if args.debug:
+        analyzer.show_debug = True
+        print("Debug mode enabled at startup")
 
     analyzer.run()
 

@@ -192,23 +192,23 @@ class PanelLayoutEngine:
 class TechnicalPanelCanvas:
     """Main canvas for managing technical panels"""
     
-    # Panel dimension registry
+    # Panel dimension registry - Standardized to Chromagram dimensions (440x450)
     PANEL_DIMENSIONS = {
-        'transient_detection': PanelDimensions(350, 450, 280, 350, orientation=PanelOrientation.PORTRAIT),  # Normalized to genre classification
-        'voice_detection': PanelDimensions(400, 450, 180, 180, fixed_height=180, orientation=PanelOrientation.LANDSCAPE),
-        'phase_correlation': PanelDimensions(480, 600, 400, 400, fixed_height=400, orientation=PanelOrientation.LANDSCAPE),  # Increased width by 20%
-        'harmonic_analysis': PanelDimensions(300, 400, 250, 300, orientation=PanelOrientation.PORTRAIT),
-        'professional_meters': PanelDimensions(350, 450, 280, 350, orientation=PanelOrientation.PORTRAIT),
-        'bass_zoom': PanelDimensions(400, 1650, 150, 250, orientation=PanelOrientation.LANDSCAPE),  # Prefers full width
-        'chromagram': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Further increased height for better layout
-        'genre_classification': PanelDimensions(350, 450, 280, 350, orientation=PanelOrientation.PORTRAIT),
-        'pitch_detection': PanelDimensions(350, 450, 280, 350, orientation=PanelOrientation.PORTRAIT),  # Normalized to genre classification
-        'vu_meters': PanelDimensions(200, 300, 300, 400, orientation=PanelOrientation.PORTRAIT),
-        'integrated_music': PanelDimensions(360, 480, 400, 500, orientation=PanelOrientation.LANDSCAPE),  # Reduced width by 40%
-        'room_analysis': PanelDimensions(300, 400, 200, 250, orientation=PanelOrientation.SQUARE),
-        'beat_detection': PanelDimensions(350, 450, 280, 350, orientation=PanelOrientation.PORTRAIT),  # Beat detection and BPM
-        'spectrogram_waterfall': PanelDimensions(500, 800, 300, 400, orientation=PanelOrientation.LANDSCAPE),  # Spectrogram waterfall display
-        'frequency_band_tracker': PanelDimensions(400, 600, 250, 350, orientation=PanelOrientation.LANDSCAPE),  # Frequency band energy tracker
+        'transient_detection': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'voice_detection': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'phase_correlation': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'harmonic_analysis': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'professional_meters': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'bass_zoom': PanelDimensions(400, 1650, 150, 250, orientation=PanelOrientation.LANDSCAPE),  # Keep full width preference
+        'chromagram': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Reference dimensions
+        'genre_classification': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'pitch_detection': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'vu_meters': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'integrated_music': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'room_analysis': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'beat_detection': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'spectrogram_waterfall': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
+        'frequency_band_tracker': PanelDimensions(330, 440, 380, 450, orientation=PanelOrientation.PORTRAIT),  # Standardized
     }
     
     def __init__(self, x: int, y: int, max_width: int, padding: int = 10):
@@ -268,15 +268,18 @@ class TechnicalPanelCanvas:
                     panel_info.animation_progress + self.animation_speed
                 )
     
-    def draw(self, screen: pygame.Surface):
+    def draw(self, screen: pygame.Surface, force_redraw: bool = False):
         """Draw the canvas and all visible panels"""
         total_height = self.get_total_height()
         
         if total_height > 0:
-            # Draw canvas background
-            canvas_rect = pygame.Rect(self.x, self.y, self.max_width, total_height)
-            pygame.draw.rect(screen, self.bg_color, canvas_rect)
-            pygame.draw.rect(screen, self.border_color, canvas_rect, 1)
+            # Only redraw background if needed
+            if force_redraw or not hasattr(self, '_last_total_height') or self._last_total_height != total_height:
+                # Draw canvas background
+                canvas_rect = pygame.Rect(self.x, self.y, self.max_width, total_height)
+                pygame.draw.rect(screen, self.bg_color, canvas_rect)
+                pygame.draw.rect(screen, self.border_color, canvas_rect, 1)
+                self._last_total_height = total_height
             
             # Draw visible panels
             for panel_info in self.panels.values():

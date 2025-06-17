@@ -478,26 +478,24 @@ class HarmonicAnalysisPanel:
     
     def draw(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float = 1.0):
         """Draw enhanced harmonic analysis panel"""
-        # Semi-transparent background
-        overlay = pygame.Surface((width, height))
-        overlay.set_alpha(240)
-        overlay.fill((20, 25, 35))
-        screen.blit(overlay, (x, y))
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
         
-        # Border
-        pygame.draw.rect(screen, (70, 80, 100), (x, y, width, height), 2)
-
-        current_y = y + int(10 * ui_scale)
+        # Draw background
+        draw_panel_background(screen, x, y, width, height)
+        
+        # Draw centered header
+        if self.font_medium:
+            current_y = draw_panel_header(screen, "Harmonic Analysis", self.font_medium,
+                                        x, y, width)
+        else:
+            current_y = y + 35
+        
+        current_y += int(5 * ui_scale)  # Small gap after header
         
         # Divide panel into sections
         left_width = int(width * 0.6)
         right_width = width - left_width
-
-        # Title
-        if self.font_medium:
-            title = self.font_medium.render("Enhanced Harmonic Analysis", True, (200, 220, 255))
-            screen.blit(title, (x + int(10 * ui_scale), current_y))
-            current_y += int(30 * ui_scale)
 
         # Left side - Fundamentals and instruments
         left_y = current_y

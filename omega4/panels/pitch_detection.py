@@ -698,16 +698,12 @@ class PitchDetectionPanel:
     
     def draw(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float = 1.0):
         """OMEGA: Draw advanced pitch detection information overlay"""
-        # Semi-transparent background
-        overlay = pygame.Surface((width, height))
-        overlay.set_alpha(230)
-        overlay.fill((25, 20, 35))  # Slightly purple tint
-        screen.blit(overlay, (x, y))
+        # Import panel utilities
+        from .panel_utils import draw_panel_header, draw_panel_background
         
-        # Border
-        pygame.draw.rect(
-            screen, (110, 90, 140), (x, y, width, height), 2
-        )
+        # Draw background with purple tint
+        draw_panel_background(screen, x, y, width, height,
+                            bg_color=(25, 20, 35), border_color=(110, 90, 140), alpha=230)
         
         # Create scaled fonts if ui_scale is different from 1.0
         if ui_scale != 1.0 and ui_scale > 0.5:
@@ -720,20 +716,22 @@ class PitchDetectionPanel:
             font_small = self.font_small
             font_tiny = self.font_tiny
         
-        y_offset = y + int(20 * ui_scale)
-        line_height = int(26 * ui_scale)
-        
-        # Title
+        # Draw centered header
         if font_medium:
-            title_text = font_medium.render("OMEGA Pitch Detection", True, (220, 200, 255))
-            screen.blit(title_text, (x + int(20 * ui_scale), y_offset))
-            y_offset += int(35 * ui_scale)
+            y_offset = draw_panel_header(screen, "OMEGA Pitch Detection", font_medium,
+                                       x, y, width, bg_color=(25, 20, 35),
+                                       border_color=(110, 90, 140),
+                                       text_color=(220, 200, 255))
         else:
-            # Fallback if no font is set - draw a simple label
+            # Fallback if no font is set
             fallback_font = pygame.font.Font(None, int(24 * ui_scale))
-            title_text = fallback_font.render("OMEGA Pitch Detection", True, (220, 200, 255))
-            screen.blit(title_text, (x + int(20 * ui_scale), y_offset))
-            y_offset += int(35 * ui_scale)
+            y_offset = draw_panel_header(screen, "OMEGA Pitch Detection", fallback_font,
+                                       x, y, width, bg_color=(25, 20, 35),
+                                       border_color=(110, 90, 140),
+                                       text_color=(220, 200, 255))
+        
+        y_offset += int(10 * ui_scale)  # Small gap after header
+        line_height = int(26 * ui_scale)
         
         # Main pitch info
         pitch = self.pitch_info.get('pitch', 0.0)
