@@ -690,11 +690,17 @@ class ProfessionalLiveAudioAnalyzer:
     def process_multi_resolution_fft(self, audio_data):
         """Process audio with multiple FFT resolutions using new module"""
         try:
+            # Time FFT computation
+            fft_start_time = time.perf_counter()
+            
             # Check FFT cache first
             cached_result = get_cached_fft(audio_data)
             if cached_result is not None:
                 # Extract spectrum from cached result
                 if 'spectrum' in cached_result:
+                    # Update FFT time even for cached results
+                    fft_time_ms = (time.perf_counter() - fft_start_time) * 1000
+                    self.performance_profiler.profiler.update_audio_latency('fft_time', fft_time_ms)
                     return cached_result['spectrum']
                     
             # Use the improved MultiResolutionFFT module
@@ -721,6 +727,10 @@ class ProfessionalLiveAudioAnalyzer:
                 elif len(spectrum) < self.bars:
                     spectrum = np.interp(np.linspace(0, len(spectrum) - 1, self.bars),
                                        np.arange(len(spectrum)), spectrum)
+            
+            # Update FFT computation time
+            fft_time_ms = (time.perf_counter() - fft_start_time) * 1000
+            self.performance_profiler.profiler.update_audio_latency('fft_time', fft_time_ms)
             
             # Detect transients
             rms = np.sqrt(np.mean(audio_data**2))
@@ -749,6 +759,8 @@ class ProfessionalLiveAudioAnalyzer:
         except Exception as e:
             print(f"Multi-resolution FFT failed: {e}")
             # Fallback to simple FFT
+            fallback_start = time.perf_counter()
+            
             fft_result = np.fft.rfft(audio_data)
             spectrum = np.abs(fft_result)
             
@@ -758,6 +770,10 @@ class ProfessionalLiveAudioAnalyzer:
             elif len(spectrum) < self.bars:
                 spectrum = np.interp(np.linspace(0, len(spectrum) - 1, self.bars),
                                    np.arange(len(spectrum)), spectrum)
+            
+            # Update FFT time for fallback
+            fft_time_ms = (time.perf_counter() - fallback_start) * 1000
+            self.performance_profiler.profiler.update_audio_latency('fft_time', fft_time_ms)
             
             return spectrum
 
@@ -1697,8 +1713,27 @@ class ProfessionalLiveAudioAnalyzer:
                 # V = toggle visibility
                 self._toggle_panel('voice_detection', 'Voice Detection')
         elif event.key == pygame.K_y:
-            # Toggle phase correlation panel in canvas
-            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+            # Phase correlation panel controls
+            mods = pygame.key.get_mods()
+            if mods & pygame.KMOD_CTRL and mods & pygame.KMOD_SHIFT:
+                # Ctrl+Shift+Y = export phase correlation data
+                if hasattr(self, 'phase_correlation_panel'):
+                    filepath = self.phase_correlation_panel.export_phase_data()
+                    if filepath:
+                        print(f"Phase correlation data exported to: {filepath}")
+                    else:
+                        print("Failed to export phase correlation data")
+            elif mods & pygame.KMOD_CTRL:
+                # Ctrl+Y = cycle display modes (goniometer -> vectorscope -> correlation_cloud)
+                if hasattr(self, 'phase_correlation_panel'):
+                    new_mode = self.phase_correlation_panel.toggle_display_mode()
+                    print(f"Phase Correlation Display Mode: {new_mode.title()}")
+            elif mods & pygame.KMOD_ALT:
+                # Alt+Y = reset phase correlation statistics
+                if hasattr(self, 'phase_correlation_panel'):
+                    self.phase_correlation_panel.reset_statistics()
+                    print("Phase correlation statistics reset")
+            elif mods & pygame.KMOD_SHIFT:
                 # Shift+Y = freeze/unfreeze
                 self.frozen_phase_correlation = not self.frozen_phase_correlation
                 print(f"Phase Correlation: {'FROZEN' if self.frozen_phase_correlation else 'ACTIVE'}")
@@ -2691,15 +2726,25 @@ def main():
     print("  Panel Toggle Keys (press to show/hide, Shift+key to freeze/unfreeze):")
     print("    M: Professional meters | U: VU meters | H: Harmonic analysis")
     print("    P: Pitch detection | C: Chromagram | J: Genre classification")
-    print("    I: Integrated Music Analysis | V: Voice detection")
-    print("    Y: Phase correlation | X: Transient detection")
+    print("    V: Voice detection | Y: Phase correlation | X: Transient detection")
     print("    Z: Bass zoom (legacy) | R: Room analysis (legacy)")
     print("  ")
+    print("  Phase Correlation Panel Advanced Controls (Y key):")
+    print("    Y: Toggle visibility | Shift+Y: Freeze/unfreeze")
+    print("    Ctrl+Y: Cycle display modes (Goniometer → Vectorscope → Correlation Cloud)")
+    print("    Alt+Y: Reset phase correlation statistics")
+    print("    Ctrl+Shift+Y: Export phase correlation data to CSV")
+    print("  ")
     print("  Other Controls:")
-    print("    G: Toggle grid | S: Screenshot | D: Debug mode | Shift+D: Export debug to file")
-    print("    K: Adaptive frequency allocation | T: Test mode")
+    print("    G: Toggle grid | Shift+G: Toggle professional meters gating")
+    print("    S: Screenshot | D: Debug mode | Shift+D: Export debug to file")
+    print("    K: Adaptive frequency allocation | O: Performance overlay")
     print("    SPACE: Toggle A/B mode | ↑/↓: Adjust gain")
     print("    1-9: Window size presets | F11: Fullscreen | ESC: Exit")
+    print("  ")
+    print("  Professional Meters Controls:")
+    print("    Shift+R: Reset peak hold | Shift+W: Cycle weighting (K/A/C/Z)")
+    print("    Shift+T: Cycle peak hold time (0.5s/1s/2s/5s/10s)")
     print("=" * 90)
 
     analyzer = ProfessionalLiveAudioAnalyzer(

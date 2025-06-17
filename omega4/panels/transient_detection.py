@@ -13,7 +13,7 @@ class TransientDetectionPanel:
     
     def __init__(self, sample_rate):
         self.sample_rate = sample_rate
-        self.panel_height = 160
+        self.panel_height = 180  # Increased for new features
         self.is_frozen = False
         
         # Transient detection
@@ -61,6 +61,16 @@ class TransientDetectionPanel:
         self.prev_envelope = 0.0
         self.attack_threshold = 0.1  # Minimum attack time for transient
         self.spectral_flux_history = deque(maxlen=10)  # For spectral flux detection
+        
+        # Phase deviation detection
+        self.prev_phase = None
+        self.prev_prev_phase = None
+        self.novelty_history = deque(maxlen=50)
+        
+        # Advanced features
+        self.last_centroid = 0.0
+        self.last_zcr = 0.0
+        self.last_rolloff = 0.0
     
     def set_fonts(self, fonts):
         """Set fonts for rendering"""
@@ -136,27 +146,44 @@ class TransientDetectionPanel:
                 self.transient_detected = False
                 self.transient_strength *= 0.85  # Slower decay
         
-        # Method 2: Spectral flux detection
-        if len(audio_data) >= 512:
-            # Compute spectrum
-            window = np.hanning(min(512, len(audio_data)))
-            windowed = audio_data[:len(window)] * window
+        # Method 2: Enhanced spectral flux detection  
+        if len(audio_data) >= 256:  # Lower threshold to handle more cases
+            # Compute spectrum with fixed size window for consistency
+            window_size = 512
+            window = np.hanning(window_size)
+            # Ensure we always use exactly window_size samples
+            if len(audio_data) >= window_size:
+                windowed = audio_data[:window_size] * window
+            else:
+                # Pad with zeros if needed
+                padded = np.zeros(window_size)
+                padded[:len(audio_data)] = audio_data
+                windowed = padded * window
+            
             spectrum = np.abs(np.fft.rfft(windowed))
+            
+            # Always store fixed size (first 128 bins) for consistency
+            spectrum_trimmed = spectrum[:128]
             
             # Calculate spectral flux
             if len(self.spectral_flux_history) > 0:
                 prev_spectrum = self.spectral_flux_history[-1]
-                if len(spectrum) == len(prev_spectrum):
-                    # Positive spectral flux
-                    flux = np.sum(np.maximum(0, spectrum - prev_spectrum))
-                    avg_flux = np.mean([np.sum(s) for s in self.spectral_flux_history])
-                    
-                    if avg_flux > 0 and flux > avg_flux * 1.8:  # Threshold for flux
-                        self.transient_detected = True
-                        self.transient_strength = max(self.transient_strength, 
-                                                    min(1.0, flux / (avg_flux * 3)))
+                # Now both spectrums are guaranteed to be 128 bins
+                # Positive spectral flux
+                flux = np.sum(np.maximum(0, spectrum_trimmed - prev_spectrum))
+                avg_flux = np.mean([np.sum(s) for s in self.spectral_flux_history])
+                
+                if avg_flux > 0 and flux > avg_flux * 1.8:  # Threshold for flux
+                    self.transient_detected = True
+                    # Ensure avg_flux is never zero for division
+                    divisor = max(avg_flux * 3, 0.001)
+                    self.transient_strength = max(self.transient_strength, 
+                                                min(1.0, flux / divisor))
             
-            self.spectral_flux_history.append(spectrum[:128])  # Store first 128 bins
+            self.spectral_flux_history.append(spectrum_trimmed)
+        
+        # Method 3: Enhanced phase deviation detection
+        self._detect_transient_enhanced(audio_data)
         
         self.prev_envelope = self.envelope
         
@@ -178,41 +205,73 @@ class TransientDetectionPanel:
                     if hf_ratio > 0.3:  # Significant HF content
                         self.transient_detected = True
                         self.transient_strength = max(self.transient_strength, hf_ratio)
+        
+        # Update adaptive sensitivity
+        self._update_adaptive_sensitivity()
     
     def _classify_transient(self, audio_data, spectrum):
-        """Classify the type of transient"""
+        """Advanced transient classification with more features"""
         if spectrum is None:
             # Compute spectrum if not provided
             window = np.hanning(len(audio_data))
             windowed = audio_data * window
             spectrum = np.abs(np.fft.rfft(windowed))
         
-        # Calculate energy in different frequency bands
-        freqs = np.fft.rfftfreq(len(audio_data), 1/self.sample_rate)
+        # Calculate frequency array based on spectrum size (not audio_data size)
+        # This ensures freqs and spectrum always match
+        n_fft = (len(spectrum) - 1) * 2  # Reverse engineer FFT size from spectrum
+        freqs = np.fft.rfftfreq(n_fft, 1/self.sample_rate)
         
-        # Define band boundaries
+        # Ensure arrays are same length (defensive programming)
+        min_len = min(len(freqs), len(spectrum))
+        freqs = freqs[:min_len]
+        spectrum_trimmed = spectrum[:min_len]
+        
+        # Spectral centroid
+        if np.sum(spectrum_trimmed) > 0:
+            self.last_centroid = np.sum(freqs * spectrum_trimmed) / np.sum(spectrum_trimmed)
+        else:
+            self.last_centroid = 0
+        
+        # Zero crossing rate (good for hi-hats)
+        self.last_zcr = np.sum(np.abs(np.diff(np.sign(audio_data)))) / (2 * len(audio_data))
+        
+        # Spectral rolloff
+        cumsum = np.cumsum(spectrum_trimmed)
+        if cumsum[-1] > 0:
+            rolloff_idx = np.searchsorted(cumsum, 0.85 * cumsum[-1])
+            self.last_rolloff = freqs[rolloff_idx] if rolloff_idx < len(freqs) else freqs[-1]
+        else:
+            self.last_rolloff = 0
+        
+        # Calculate energy in different frequency bands
         band_limits = [0, 100, 250, 2000, self.sample_rate/2]
         
         for i in range(4):
             low_idx = np.searchsorted(freqs, band_limits[i])
             high_idx = np.searchsorted(freqs, band_limits[i+1])
             
-            if low_idx < len(spectrum) and high_idx < len(spectrum):
-                self.band_energies[i] = np.sum(spectrum[low_idx:high_idx])
+            if low_idx < len(spectrum_trimmed) and high_idx < len(spectrum_trimmed):
+                self.band_energies[i] = np.sum(spectrum_trimmed[low_idx:high_idx])
         
         # Normalize band energies
         total_energy = np.sum(self.band_energies)
         if total_energy > 0:
             self.band_energies /= total_energy
         
-        # Classify based on energy distribution
-        if self.band_energies[0] > 0.6:  # Sub-bass dominant
+        # Enhanced classification logic
+        if self.band_energies[0] > 0.7 and self.last_centroid < 150:
             self.transient_type = "Kick"
-        elif self.band_energies[1] > 0.4 and self.band_energies[2] > 0.3:
-            self.transient_type = "Snare"
-        elif self.band_energies[3] > 0.5:  # High frequency dominant
+        elif self.band_energies[1] > 0.4 and self.last_centroid > 200 and self.last_centroid < 800:
+            if self.last_zcr > 0.1:  # High ZCR indicates snare brush
+                self.transient_type = "Snare"
+            else:
+                self.transient_type = "Tom"
+        elif self.last_zcr > 0.3 and self.last_rolloff > 5000:
             self.transient_type = "HiHat"
-        elif self.band_energies[2] > 0.4:
+        elif self.last_centroid > 1000 and self.band_energies[3] > 0.4:
+            self.transient_type = "Cymbal"
+        elif self.band_energies[2] > 0.5:
             self.transient_type = "Perc"
         else:
             self.transient_type = "Other"
@@ -252,6 +311,74 @@ class TransientDetectionPanel:
             
             # Decay time in ms
             self.decay_time = (end_idx - peak_idx) * 1000 / self.sample_rate
+    
+    def _detect_transient_enhanced(self, audio_data):
+        """Enhanced transient detection using spectral novelty function"""
+        # Pre-emphasis filter to enhance transients
+        if len(audio_data) > 1:
+            pre_emphasized = np.append(audio_data[0], audio_data[1:] - 0.97 * audio_data[:-1])
+        else:
+            pre_emphasized = audio_data
+        
+        # Compute spectral novelty using phase deviation
+        if len(pre_emphasized) >= 1024:
+            # Use STFT for better time resolution
+            window = np.hanning(1024)
+            
+            # Current frame
+            current_frame = pre_emphasized[-1024:] * window
+            current_fft = np.fft.rfft(current_frame)
+            current_phase = np.angle(current_fft)
+            current_mag = np.abs(current_fft)
+            
+            if self.prev_phase is not None and self.prev_prev_phase is not None:
+                # Ensure all arrays have the same shape
+                min_len = min(len(current_phase), len(self.prev_phase), len(self.prev_prev_phase))
+                current_phase_trim = current_phase[:min_len]
+                prev_phase_trim = self.prev_phase[:min_len]
+                prev_prev_phase_trim = self.prev_prev_phase[:min_len]
+                current_mag_trim = current_mag[:min_len]
+                
+                # Phase deviation
+                target_phase = 2 * prev_phase_trim - prev_prev_phase_trim
+                phase_dev = np.abs(current_phase_trim - target_phase)
+                phase_dev = np.minimum(phase_dev, np.pi)
+                
+                # Weighted by magnitude
+                novelty = np.sum(current_mag_trim * phase_dev)
+                
+                # Adaptive threshold based on running median
+                self.novelty_history.append(novelty)
+                if len(self.novelty_history) > 0:
+                    threshold = np.median(list(self.novelty_history)) * 2.5
+                    
+                    # Ensure threshold is never zero to avoid division by zero
+                    if threshold <= 0:
+                        threshold = 0.001
+                    
+                    if novelty > threshold:
+                        self.transient_detected = True
+                        self.transient_strength = min(1.0, novelty / (threshold * 3))
+            
+            # Update phase history
+            self.prev_prev_phase = self.prev_phase if self.prev_phase is not None else current_phase.copy()
+            self.prev_phase = current_phase.copy()
+    
+    def _update_adaptive_sensitivity(self):
+        """Automatically adjust sensitivity based on content"""
+        if len(self.transient_events) >= 10:
+            # Calculate average time between transients
+            times = [e['time'] for e in self.transient_events]
+            intervals = np.diff(times[-10:])
+            
+            if len(intervals) > 0:
+                avg_interval = np.mean(intervals)
+                
+                # Adjust sensitivity based on transient density
+                if avg_interval < 0.2:  # Very dense (> 5 per second)
+                    self.sensitivity = min(2.5, self.sensitivity + 0.1)
+                elif avg_interval > 1.0:  # Sparse (< 1 per second)
+                    self.sensitivity = max(1.2, self.sensitivity - 0.1)
     
     def draw(self, screen, x, y, width, height=None, panel_color=None):
         """Draw the transient detection panel"""
@@ -327,8 +454,18 @@ class TransientDetectionPanel:
             timing_text = f"Attack: {self.attack_time:.1f}ms / Decay: {self.decay_time:.1f}ms"
             timing_surface = self.fonts['small'].render(timing_text, True, (180, 180, 180))
             screen.blit(timing_surface, (x + 20, info_y + 20))
+            
+            # Add advanced features display
+            if 'tiny' in self.fonts and self.fonts['tiny']:
+                features_text = f"Centroid: {self.last_centroid:.0f}Hz / ZCR: {self.last_zcr:.3f}"
+                features_surface = self.fonts['tiny'].render(features_text, True, (150, 150, 150))
+                screen.blit(features_surface, (x + 20, info_y + 40))
         
-        y_offset += 50
+        # Adjust y_offset based on whether features are displayed
+        if self.transient_detected:
+            y_offset += 70  # Extra space for features text
+        else:
+            y_offset += 50
         
         # Envelope and transient history graph - use more vertical space
         graph_height = min(120, height - (y_offset - y) - 80)
@@ -426,6 +563,12 @@ class TransientDetectionPanel:
             'strength': self.transient_strength,
             'type': self.transient_type,
             'attack_time': self.attack_time,
+            'decay_time': self.decay_time,
             'crest_factor': self.crest_factor,
-            'recent_events': list(self.transient_events)
+            'recent_events': list(self.transient_events),
+            'sensitivity': self.sensitivity,
+            'centroid': self.last_centroid,
+            'zcr': self.last_zcr,
+            'rolloff': self.last_rolloff,
+            'band_energies': self.band_energies.tolist()
         }

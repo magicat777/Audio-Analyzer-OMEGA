@@ -323,6 +323,9 @@ class ProfessionalMetersPanel:
         self.peak_hold_value = -100.0
         self.peak_hold_counter = 0
         
+        # True peak history for graph
+        self.true_peak_history = deque(maxlen=300)  # 5 seconds at 60 FPS
+        
         # Gating mode
         self.use_gated_measurement = True
         
@@ -357,6 +360,10 @@ class ProfessionalMetersPanel:
         
         # Update peak hold
         current_peak = self.lufs_info.get('true_peak', -100.0)
+        
+        # Track true peak history for graph
+        self.true_peak_history.append(current_peak)
+        
         if current_peak > self.peak_hold_value:
             self.peak_hold_value = current_peak
             self.peak_hold_counter = self.peak_hold_samples
@@ -459,16 +466,35 @@ class ProfessionalMetersPanel:
                     
                     current_y += spacing
                 
-                # Level Histogram
-                current_y += int(10 * ui_scale)
-                if len(self.level_history) > 10:
-                    self._draw_level_histogram(screen, x + 10, current_y, int(width * 0.4), 60, ui_scale)
-                    
-                # Loudness Range Graph
-                if len(self.loudness_range_history) > 10:
-                    self._draw_loudness_range(screen, x + int(width * 0.5), current_y, int(width * 0.4), 60, ui_scale)
+                # Position graphs right below the "GATED" text on the right side
+                graphs_start_y = info_y + int(25 * ui_scale)  # Start at same level as meters
                 
-                current_y += 70
+                # Graph dimensions and positioning
+                graph_width = int(width * 0.45)  # Right side width
+                graph_x = x + width - graph_width - 10  # Right side positioning
+                graph_padding = 8  # 8px padding between graphs
+                graph_bottom_padding = 10  # 10px padding below each graph's border
+                
+                # True Peak Graph (top) - made taller
+                true_peak_height = 80  # Increased from 40 to 80
+                if len(self.true_peak_history) > 10:
+                    self._draw_true_peak_graph(screen, graph_x, graphs_start_y, graph_width, true_peak_height, ui_scale)
+                current_graph_y = graphs_start_y + true_peak_height + graph_bottom_padding + graph_padding
+                
+                # Level Histogram (middle)
+                histogram_height = 60
+                if len(self.level_history) > 10:
+                    self._draw_level_histogram(screen, graph_x, current_graph_y, graph_width, histogram_height, ui_scale)
+                current_graph_y += histogram_height + graph_bottom_padding + graph_padding
+                
+                # Loudness Range Graph (bottom)
+                loudness_height = 60
+                if len(self.loudness_range_history) > 10:
+                    self._draw_loudness_range(screen, graph_x, current_graph_y, graph_width, loudness_height, ui_scale)
+                current_graph_y += loudness_height + graph_bottom_padding
+                
+                # Set current_y to continue after the last meter, not after graphs
+                # This ensures transient analysis appears below the meter text, not below graphs
                 
                 # Transient Analysis
                 current_y += int(10 * ui_scale)
@@ -482,6 +508,10 @@ class ProfessionalMetersPanel:
                 screen.blit(attack_surf, (x + 10, current_y))
                 current_y += 20
                 screen.blit(punch_surf, (x + 10, current_y))
+                current_y += 30
+                
+                # Mini LUFS Half-Dials - positioned 10px above panel bottom edge
+                self._draw_lufs_mini_dials(screen, x, y, width, height, ui_scale)
     
     def get_lufs_color(self, lufs_value: float) -> Tuple[int, int, int]:
         """Get color for LUFS value based on broadcast standards"""
@@ -591,6 +621,97 @@ class ProfessionalMetersPanel:
             label = self.font_small.render("Level Distribution", True, (140, 150, 160))
             screen.blit(label, (x + 2, y - 15))
     
+    def _draw_true_peak_graph(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float):
+        """Draw true peak history graph"""
+        if len(self.true_peak_history) < 2:
+            return
+        
+        # Background with border
+        pygame.draw.rect(screen, (25, 20, 30), (x, y, width, height))
+        pygame.draw.rect(screen, (70, 60, 80), (x, y, width, height), 1)
+        
+        # Convert deque to list for graphing
+        peak_values = list(self.true_peak_history)
+        
+        # Set reasonable range for true peak display (-30 to +3 dBTP)
+        min_peak = -30.0
+        max_peak = 3.0
+        peak_range = max_peak - min_peak
+        
+        # Draw reference lines (ensure they're contained within graph bounds)
+        reference_levels = [0, -3, -6, -12, -20]
+        for level in reference_levels:
+            if min_peak <= level <= max_peak:
+                line_y = y + height - int(((level - min_peak) / peak_range) * height)
+                # Ensure line is within graph bounds
+                line_y = max(y, min(y + height - 1, line_y))
+                
+                if level == 0:
+                    # Red line for 0 dBTP (clipping threshold)
+                    color = (255, 100, 100)
+                    thickness = 2
+                elif level == -3:
+                    # Orange line for -3 dBTP (warning)
+                    color = (255, 150, 100)
+                    thickness = 1
+                else:
+                    # Gray reference lines
+                    color = (60, 60, 80)
+                    thickness = 1
+                
+                # Draw line only within the graph area
+                pygame.draw.line(screen, color, (x, line_y), (x + width, line_y), thickness)
+        
+        # Draw peak history line
+        points = []
+        for i, peak in enumerate(peak_values):
+            # Clamp peak value to display range
+            clamped_peak = max(min_peak, min(peak, max_peak))
+            
+            px = x + int((i / len(peak_values)) * width)
+            py = y + height - int(((clamped_peak - min_peak) / peak_range) * height)
+            # Ensure point is within graph bounds
+            py = max(y, min(y + height - 1, py))
+            points.append((px, py))
+        
+        if len(points) >= 2:
+            # Color the line based on current peak level
+            current_peak = peak_values[-1]
+            if current_peak > -0.1:
+                line_color = (255, 80, 80)  # Red - clipping risk
+            elif current_peak > -3:
+                line_color = (255, 180, 80)  # Orange - hot
+            elif current_peak > -6:
+                line_color = (80, 255, 80)  # Green - good
+            else:
+                line_color = (180, 180, 220)  # Blue - normal
+            
+            pygame.draw.lines(screen, line_color, False, points, 2)
+            
+            # Highlight current value point
+            if points:
+                pygame.draw.circle(screen, line_color, points[-1], 3)
+        
+        # Draw peak hold line if active
+        if self.peak_hold_value > min_peak and self.peak_hold_counter > 0:
+            hold_y = y + height - int(((self.peak_hold_value - min_peak) / peak_range) * height)
+            # Ensure hold line is within graph bounds
+            hold_y = max(y, min(y + height - 1, hold_y))
+            pygame.draw.line(screen, (255, 200, 200), (x, hold_y), (x + width, hold_y), 1)
+        
+        # Label and current value
+        if self.font_small:
+            label = self.font_small.render("True Peak", True, (180, 160, 200))
+            screen.blit(label, (x + 2, y - 15))
+            
+            # Current value display
+            if peak_values:
+                current_peak = peak_values[-1]
+                value_text = f"{current_peak:+4.1f}"
+                value_color = self.get_peak_color(current_peak)
+                value_surf = self.font_small.render(value_text, True, value_color)
+                screen.blit(value_surf, (x + width - 40, y - 15))
+    
     def _draw_loudness_range(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float):
         """Draw loudness range history graph"""
         if len(self.loudness_range_history) < 2:
@@ -608,6 +729,8 @@ class ProfessionalMetersPanel:
         for i, lr in enumerate(lr_values):
             px = x + int((i / len(lr_values)) * width)
             py = y + height - int((lr / max_lr) * height * 0.9)
+            # Ensure point is within graph bounds
+            py = max(y, min(y + height - 1, py))
             points.append((px, py))
         
         if len(points) >= 2:
@@ -621,6 +744,10 @@ class ProfessionalMetersPanel:
         if max_lr > 0:
             low_y = y + height - int((target_low / max_lr) * height * 0.9)
             high_y = y + height - int((target_high / max_lr) * height * 0.9)
+            
+            # Ensure target lines are within graph bounds
+            low_y = max(y, min(y + height - 1, low_y))
+            high_y = max(y, min(y + height - 1, high_y))
             
             pygame.draw.line(screen, (100, 150, 100), (x, low_y), (x + width, low_y), 1)
             pygame.draw.line(screen, (150, 100, 100), (x, high_y), (x + width, high_y), 1)
@@ -643,3 +770,125 @@ class ProfessionalMetersPanel:
                 value_text = f"{current_lr:.1f} LU"
                 value_surf = self.font_small.render(value_text, True, (200, 220, 200))
                 screen.blit(value_surf, (x + width - 50, y - 15))
+    
+    def _draw_lufs_mini_dials(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float):
+        """Draw three mini LUFS half-dials for M/S/I values"""
+        if not hasattr(self, 'lufs_info'):
+            return
+        
+        # Dial specifications - doubled in size (100% increase)
+        dial_radius = 70  # Increased from 35 to 70 (100% larger)
+        
+        # Improved spacing and positioning
+        border_padding = 8  # Padding between each border (reduced to fit)
+        border_extension = 10  # Optimized to fit within panel width
+        total_border_width = (dial_radius + border_extension) * 2  # Each border width
+        
+        # Calculate centered positioning
+        total_needed_width = 3 * total_border_width + 2 * border_padding
+        left_margin = (width - total_needed_width) // 2
+        dial_start_x = x + left_margin + border_extension  # Start position for first dial center
+        
+        # Position with bottom border just below LUFS value text (reduce whitespace)
+        dial_y = y + height - dial_radius - 25  # Adjust to align bottom border with LUFS text level
+        
+        # LUFS range for dial (-40 to -5 LUFS is typical broadcast range)
+        min_lufs = -40.0
+        max_lufs = -5.0
+        lufs_range = max_lufs - min_lufs
+        
+        # Three dials: Momentary, Short-term, Integrated
+        dials = [
+            ("M", self.lufs_info.get('momentary', -100), "Momentary"),
+            ("S", self.lufs_info.get('short_term', -100), "Short-term"), 
+            ("I", self.lufs_info.get('integrated', -100), "Integrated")
+        ]
+        
+        for i, (label, value, full_name) in enumerate(dials):
+            # Calculate dial position with proper spacing and padding between borders
+            border_size = dial_radius + border_extension  # Border extends beyond dial
+            
+            # Fixed positioning calculation: start from left margin + border size, then add spacing for each dial
+            dial_x = x + left_margin + border_size + i * (total_border_width + border_padding)
+            
+            # Draw rectangular border around each meter (darker shade) with reduced height
+            border_height = border_size * 2 - 20  # Reduce total height by 20px
+            border_rect = pygame.Rect(dial_x - border_size, dial_y - border_size + 10, 
+                                    border_size * 2, border_height)
+            pygame.draw.rect(screen, (15, 20, 25), border_rect)  # Darker background
+            pygame.draw.rect(screen, (50, 60, 70), border_rect, 1)  # Subtle border
+            
+            # Draw dial background (half circle)
+            dial_rect = pygame.Rect(dial_x - dial_radius, dial_y - dial_radius, 
+                                  dial_radius * 2, dial_radius * 2)
+            
+            # Draw background arc (180 degrees - half circle)
+            import math
+            center = (dial_x, dial_y)
+            
+            # Background arc
+            arc_points = []
+            for angle in range(180, 361):  # 180 to 360 degrees (bottom half)
+                radian = math.radians(angle)
+                px = center[0] + int((dial_radius - 3) * math.cos(radian))
+                py = center[1] + int((dial_radius - 3) * math.sin(radian))
+                arc_points.append((px, py))
+            
+            if len(arc_points) >= 3:
+                pygame.draw.polygon(screen, (30, 35, 45), arc_points)
+                pygame.draw.polygon(screen, (70, 80, 100), arc_points, 2)
+            
+            # Calculate needle angle based on LUFS value
+            if value > -100:  # Valid LUFS value
+                # Clamp value to dial range
+                clamped_value = max(min_lufs, min(value, max_lufs))
+                # Convert to angle (180 to 360 degrees)
+                progress = (clamped_value - min_lufs) / lufs_range
+                needle_angle = 180 + (progress * 180)  # 180 to 360 degrees
+                
+                # Draw colored arc based on LUFS value
+                color = self.get_lufs_color(value)
+                
+                # Draw value arc
+                value_points = []
+                for angle in range(180, int(needle_angle) + 1):
+                    radian = math.radians(angle)
+                    px = center[0] + int((dial_radius - 8) * math.cos(radian))
+                    py = center[1] + int((dial_radius - 8) * math.sin(radian))
+                    value_points.append((px, py))
+                
+                if len(value_points) >= 2:
+                    pygame.draw.lines(screen, color, False, value_points, 4)
+                
+                # Draw needle
+                needle_radian = math.radians(needle_angle)
+                needle_end_x = center[0] + int((dial_radius - 5) * math.cos(needle_radian))
+                needle_end_y = center[1] + int((dial_radius - 5) * math.sin(needle_radian))
+                pygame.draw.line(screen, (255, 255, 255), center, 
+                               (needle_end_x, needle_end_y), 2)
+                
+                # Draw center dot
+                pygame.draw.circle(screen, (200, 200, 200), center, 3)
+            
+            # Draw reference marks
+            for ref_angle in [180, 225, 270, 315, 360]:  # 5 marks across the arc
+                mark_radian = math.radians(ref_angle)
+                mark_start_x = center[0] + int((dial_radius - 6) * math.cos(mark_radian))
+                mark_start_y = center[1] + int((dial_radius - 6) * math.sin(mark_radian))
+                mark_end_x = center[0] + int((dial_radius - 2) * math.cos(mark_radian))
+                mark_end_y = center[1] + int((dial_radius - 2) * math.sin(mark_radian))
+                pygame.draw.line(screen, (100, 110, 130), 
+                               (mark_start_x, mark_start_y), (mark_end_x, mark_end_y), 1)
+            
+            # Label above dial
+            if self.font_small:
+                label_surf = self.font_small.render(label, True, (180, 190, 210))
+                label_rect = label_surf.get_rect(centerx=dial_x, bottom=dial_y - dial_radius - 5)
+                screen.blit(label_surf, label_rect)
+            
+            # Value below dial
+            if self.font_small and value > -100:
+                value_text = f"{value:+.1f}"
+                value_surf = self.font_small.render(value_text, True, self.get_lufs_color(value))
+                value_rect = value_surf.get_rect(centerx=dial_x, top=dial_y + 8)
+                screen.blit(value_surf, value_rect)
