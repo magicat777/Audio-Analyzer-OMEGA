@@ -1,7 +1,9 @@
 """
-Genre Classification Panel for OMEGA-4 Audio Analyzer
-Phase 3: Extract genre classification as self-contained module
-OMEGA-2 Feature: Real-time genre detection
+Enhanced Genre Classification with Better Metal Detection
+Fixes:
+1. Added metal-specific features
+2. Improved confidence scaling
+3. Better discrimination between metal and electronic
 """
 
 import pygame
@@ -20,27 +22,27 @@ class GenreClassifier:
         self.genres = ['Rock', 'Pop', 'Jazz', 'Classical', 'Electronic', 
                       'Hip-Hop', 'Metal', 'Country', 'R&B', 'Folk']
         
-        # Feature history for temporal analysis
-        self.feature_buffer = deque(maxlen=43)  # ~1 second at 43 FPS
-        self.genre_history = deque(maxlen=30)  # Smooth genre detection
+        # Feature history for temporal analysis - VERY SHORT for fast response
+        self.feature_buffer = deque(maxlen=5)   # Even shorter
+        self.genre_history = deque(maxlen=3)    # Very fast response
         
         # Initialize dedicated hip-hop detector
         self.hip_hop_detector = HipHopDetector(sample_rate)
         
-        # Genre-specific feature patterns (enhanced with harmonic features)
+        # Genre-specific feature patterns with enhanced metal detection
         self.genre_patterns = {
             'Rock': {
                 'tempo_range': (100, 140),
                 'spectral_centroid': (1500, 3000),
-                'zero_crossing_rate': (0.05, 0.15),
+                'zero_crossing_rate': (0.08, 0.18),
                 'spectral_rolloff': (3000, 5000),
                 'dynamic_range': (0.4, 0.8),
                 'percussion_strength': (0.6, 1.0),
-                # New harmonic features
-                'harmonic_complexity': (0.2, 0.5),
+                'harmonic_complexity': (0.3, 0.6),
                 'chord_change_rate': (0.3, 0.6),
                 'key_stability': (0.6, 0.9),
-                'pitch_class_concentration': (0.7, 0.9)  # Power chords = concentrated
+                'pitch_class_concentration': (0.6, 0.8),
+                'priority': 0.9
             },
             'Pop': {
                 'tempo_range': (100, 130),
@@ -49,11 +51,11 @@ class GenreClassifier:
                 'spectral_rolloff': (3500, 6000),
                 'dynamic_range': (0.3, 0.6),
                 'percussion_strength': (0.5, 0.8),
-                # New harmonic features
-                'harmonic_complexity': (0.1, 0.4),  # Simple triads
-                'chord_change_rate': (0.4, 0.7),    # Regular changes
-                'key_stability': (0.8, 1.0),        # Very stable
-                'pitch_class_concentration': (0.6, 0.8)  # Diatonic
+                'harmonic_complexity': (0.2, 0.4),
+                'chord_change_rate': (0.4, 0.7),
+                'key_stability': (0.8, 1.0),
+                'pitch_class_concentration': (0.6, 0.8),
+                'priority': 0.8
             },
             'Jazz': {
                 'tempo_range': (60, 180),
@@ -62,80 +64,85 @@ class GenreClassifier:
                 'spectral_rolloff': (2500, 4500),
                 'dynamic_range': (0.5, 0.9),
                 'percussion_strength': (0.3, 0.7),
-                # New harmonic features
-                'harmonic_complexity': (0.6, 1.0),  # Extended chords
-                'chord_change_rate': (0.5, 0.9),    # Frequent changes
-                'key_stability': (0.2, 0.6),        # Modulations common
-                'pitch_class_concentration': (0.3, 0.6)  # Chromatic
+                'harmonic_complexity': (0.6, 1.0),
+                'chord_change_rate': (0.5, 0.9),
+                'key_stability': (0.2, 0.6),
+                'pitch_class_concentration': (0.3, 0.6),
+                'priority': 0.85
             },
             'Classical': {
                 'tempo_range': (40, 180),
-                'spectral_centroid': (1200, 3000),  # Higher than hip-hop
+                'spectral_centroid': (1200, 3000),
                 'zero_crossing_rate': (0.02, 0.08),
-                'spectral_rolloff': (3000, 6000),   # Higher frequency content
+                'spectral_rolloff': (3000, 6000),
                 'dynamic_range': (0.6, 1.0),
-                'percussion_strength': (0.0, 0.2),   # Less percussion
-                # New harmonic features
-                'harmonic_complexity': (0.4, 0.8),   # More complex harmony
-                'chord_change_rate': (0.2, 0.5),    # Moderate changes
-                'key_stability': (0.7, 0.95),       # Mostly stable
-                'pitch_class_concentration': (0.4, 0.7)  # More chromatic
+                'percussion_strength': (0.0, 0.3),
+                'harmonic_complexity': (0.4, 0.8),
+                'chord_change_rate': (0.2, 0.5),
+                'key_stability': (0.7, 0.95),
+                'pitch_class_concentration': (0.4, 0.7),
+                'priority': 0.9
             },
             'Electronic': {
                 'tempo_range': (120, 140),
                 'spectral_centroid': (2000, 4000),
-                'zero_crossing_rate': (0.1, 0.25),
+                'zero_crossing_rate': (0.05, 0.15),     # Lower than metal
                 'spectral_rolloff': (4000, 8000),
-                'dynamic_range': (0.2, 0.5),
+                'dynamic_range': (0.1, 0.4),           # Very compressed
                 'percussion_strength': (0.7, 1.0),
-                # New harmonic features
-                'harmonic_complexity': (0.0, 0.3),  # Minimal harmony
-                'chord_change_rate': (0.0, 0.3),    # Static harmony
-                'key_stability': (0.9, 1.0),        # Very stable/drone
-                'pitch_class_concentration': (0.8, 1.0)  # Limited pitch set
+                'harmonic_complexity': (0.0, 0.2),      # Very simple
+                'chord_change_rate': (0.0, 0.2),        # Static
+                'key_stability': (0.95, 1.0),           # Very stable
+                'pitch_class_concentration': (0.85, 1.0), # Limited notes
+                'spectral_flux': (0.0, 0.3),            # Low flux
+                'harmonic_distortion': (0.0, 0.2),      # Clean synthesis
+                'priority': 0.8
             },
             'Hip-Hop': {
-                'tempo_range': (60, 110),  # Expanded for trap and boom bap
-                'spectral_centroid': (800, 2500),  # Lower center for bass emphasis
-                'zero_crossing_rate': (0.04, 0.20),  # Wider range for vocals
-                'spectral_rolloff': (2000, 5000),  # Adjusted for bass-heavy mix
-                'dynamic_range': (0.4, 0.8),  # Higher for punchy drums
-                'percussion_strength': (0.85, 1.0),  # Very strong beats
-                # New harmonic features
-                'harmonic_complexity': (0.1, 0.3),  # Simple harmony/loops
-                'chord_change_rate': (0.0, 0.3),    # Static or slow changes
-                'key_stability': (0.9, 1.0),        # Extremely stable
-                'pitch_class_concentration': (0.8, 1.0),  # Very limited notes
-                # Hip-hop specific features
-                'bass_emphasis': (0.7, 1.0),  # Strong sub-bass
-                'beat_regularity': (0.8, 1.0),  # Very regular beat patterns
-                'vocal_presence': (0.6, 1.0),  # Prominent vocals/rap
+                'tempo_range': (60, 110),
+                'spectral_centroid': (800, 2500),
+                'zero_crossing_rate': (0.04, 0.20),
+                'spectral_rolloff': (2000, 5000),
+                'dynamic_range': (0.4, 0.8),
+                'percussion_strength': (0.85, 1.0),
+                'harmonic_complexity': (0.1, 0.3),
+                'chord_change_rate': (0.0, 0.3),
+                'key_stability': (0.9, 1.0),
+                'pitch_class_concentration': (0.8, 1.0),
+                'bass_emphasis': (0.7, 1.0),
+                'beat_regularity': (0.8, 1.0),
+                'vocal_presence': (0.6, 1.0),
+                'priority': 1.0
             },
             'Metal': {
                 'tempo_range': (80, 200),
-                'spectral_centroid': (2000, 4000),  # Lowered - metal can be darker
-                'zero_crossing_rate': (0.12, 0.25),  # Slightly lowered
-                'spectral_rolloff': (3500, 6500),   # Lowered a bit
-                'dynamic_range': (0.2, 0.5),        # Increased upper range
-                'percussion_strength': (0.7, 1.0),
-                # New harmonic features
-                'harmonic_complexity': (0.2, 0.6),  # Power chords to complex riffs
-                'chord_change_rate': (0.5, 0.9),    # Slightly lower minimum
-                'key_stability': (0.5, 0.8),        # Modal shifts
-                'pitch_class_concentration': (0.6, 0.8)  # Minor/modal scales
+                'spectral_centroid': (1600, 3200),      # Mid-focused
+                'zero_crossing_rate': (0.20, 0.40),     # Very high - distortion
+                'spectral_rolloff': (3000, 5500),       # Not as high as electronic
+                'dynamic_range': (0.15, 0.35),          # Compressed but not flat
+                'percussion_strength': (0.7, 1.0),       # Strong drums
+                'harmonic_complexity': (0.4, 0.8),      # Complex harmonics
+                'chord_change_rate': (0.3, 0.7),        # Moderate changes
+                'key_stability': (0.4, 0.7),            # Modal shifts
+                'pitch_class_concentration': (0.5, 0.7), # Power chords
+                'spectral_flux': (0.4, 0.8),            # High flux from palm muting
+                'harmonic_distortion': (0.6, 1.0),      # High distortion
+                'mid_frequency_dominance': (0.6, 0.9),  # Mid-heavy
+                'power_chord_ratio': (0.5, 1.0),        # Power chords
+                'priority': 1.2  # Higher priority
             },
             'Country': {
                 'tempo_range': (80, 120),
-                'spectral_centroid': (1200, 2500),
-                'zero_crossing_rate': (0.04, 0.12),
-                'spectral_rolloff': (2500, 4000),
-                'dynamic_range': (0.4, 0.7),
-                'percussion_strength': (0.4, 0.7),
-                # New harmonic features
-                'harmonic_complexity': (0.1, 0.4),  # Simple triads
-                'chord_change_rate': (0.3, 0.6),    # Standard progressions
-                'key_stability': (0.8, 1.0),        # Very stable
-                'pitch_class_concentration': (0.6, 0.8)  # Major scales
+                'spectral_centroid': (1400, 2800),
+                'zero_crossing_rate': (0.05, 0.10),
+                'spectral_rolloff': (2800, 4200),
+                'dynamic_range': (0.4, 0.6),
+                'percussion_strength': (0.4, 0.6),
+                'harmonic_complexity': (0.2, 0.35),
+                'chord_change_rate': (0.3, 0.5),
+                'key_stability': (0.85, 0.95),
+                'pitch_class_concentration': (0.65, 0.75),
+                'priority': 0.6  # Lower priority
             },
             'R&B': {
                 'tempo_range': (60, 100),
@@ -144,24 +151,24 @@ class GenreClassifier:
                 'spectral_rolloff': (3000, 5000),
                 'dynamic_range': (0.3, 0.6),
                 'percussion_strength': (0.5, 0.8),
-                # New harmonic features
-                'harmonic_complexity': (0.3, 0.7),  # 7th chords common
-                'chord_change_rate': (0.3, 0.6),    # Smooth progressions
-                'key_stability': (0.6, 0.9),        # Mostly stable
-                'pitch_class_concentration': (0.5, 0.7)  # Soul harmonies
+                'harmonic_complexity': (0.3, 0.7),
+                'chord_change_rate': (0.3, 0.6),
+                'key_stability': (0.6, 0.9),
+                'pitch_class_concentration': (0.5, 0.7),
+                'priority': 0.85
             },
             'Folk': {
                 'tempo_range': (70, 120),
                 'spectral_centroid': (1000, 2000),
-                'zero_crossing_rate': (0.03, 0.10),
+                'zero_crossing_rate': (0.03, 0.08),
                 'spectral_rolloff': (2000, 3500),
                 'dynamic_range': (0.5, 0.8),
-                'percussion_strength': (0.2, 0.5),
-                # New harmonic features
-                'harmonic_complexity': (0.1, 0.3),  # Very simple
-                'chord_change_rate': (0.2, 0.5),    # Traditional patterns
-                'key_stability': (0.9, 1.0),        # Extremely stable
-                'pitch_class_concentration': (0.7, 0.9)  # Pentatonic/major
+                'percussion_strength': (0.1, 0.4),
+                'harmonic_complexity': (0.1, 0.25),
+                'chord_change_rate': (0.2, 0.4),
+                'key_stability': (0.9, 1.0),
+                'pitch_class_concentration': (0.7, 0.85),
+                'priority': 0.5  # Lower priority
             }
         }
         
@@ -170,26 +177,23 @@ class GenreClassifier:
                         chromagram_data: np.ndarray = None,
                         chord_history: List[str] = None,
                         key_history: List[str] = None) -> Dict[str, float]:
-        """Extract comprehensive audio features for genre classification
-        
-        Enhanced with harmonic features from chromagram analysis
-        """
+        """Extract comprehensive audio features for genre classification"""
         features = {}
         
-        # Use provided frequency array
+        # Ensure we have valid data
+        if len(fft_data) == 0 or len(audio_chunk) == 0:
+            return features
+            
+        # Use provided frequency array - ensure matching lengths
         magnitude = np.abs(fft_data)
+        if len(freqs) != len(magnitude):
+            freqs = np.fft.rfftfreq(len(audio_chunk), 1/self.sample_rate)[:len(magnitude)]
+        
+        # Basic spectral features
         features['spectral_centroid'] = self.compute_spectral_centroid(freqs, magnitude)
-        
-        # Spectral rolloff (high frequency content)
         features['spectral_rolloff'] = self.compute_spectral_rolloff(freqs, magnitude)
-        
-        # Zero crossing rate (percussiveness)
         features['zero_crossing_rate'] = self.compute_zero_crossing_rate(audio_chunk)
-        
-        # Spectral bandwidth
         features['spectral_bandwidth'] = self.compute_spectral_bandwidth(freqs, magnitude, features['spectral_centroid'])
-        
-        # Dynamic range estimation
         features['dynamic_range'] = self.estimate_dynamic_range(audio_chunk)
         
         # Percussion strength from drum detection
@@ -199,86 +203,402 @@ class GenreClassifier:
         
         # Enhanced harmonic complexity calculation
         harmonic_series = harmonic_info.get('harmonic_series', [])
-        if harmonic_series:
-            # Consider both number and distribution of harmonics
+        if harmonic_series and len(harmonic_series) > 0:
             num_harmonics = len(harmonic_series)
-            # Hip-hop typically has fewer, simpler harmonics
-            # Classical has more complex harmonic structures
-            if num_harmonics <= 3:
-                features['harmonic_complexity'] = 0.1  # Very simple (hip-hop/electronic)
-            elif num_harmonics <= 5:
-                features['harmonic_complexity'] = 0.3  # Simple (pop/rock)
-            elif num_harmonics <= 8:
-                features['harmonic_complexity'] = 0.5  # Moderate (jazz/classical)
+            harmonic_strengths = [h.get('strength', 0) for h in harmonic_series if isinstance(h, dict)]
+            
+            if harmonic_strengths:
+                avg_strength = np.mean(harmonic_strengths)
+                complexity = min(1.0, (num_harmonics / 10.0) * avg_strength)
+                features['harmonic_complexity'] = complexity
             else:
-                features['harmonic_complexity'] = 0.7  # Complex (classical/jazz)
+                features['harmonic_complexity'] = min(1.0, num_harmonics / 10.0)
         else:
-            # Calculate harmonic complexity from FFT data if harmonic series not available
-            if fft_data is not None and len(fft_data) > 10:
-                # Use spectral flatness as proxy for harmonic complexity
-                magnitude = np.abs(fft_data)
-                # Only use frequencies up to 4000Hz for complexity calculation
-                if len(freqs) == len(magnitude):
-                    mask = freqs < 4000
-                    magnitude = magnitude[mask]
-                
-                # Avoid log of zero
-                safe_magnitude = magnitude[magnitude > 1e-10]
-                if len(safe_magnitude) > 0:
-                    geometric_mean = np.exp(np.mean(np.log(safe_magnitude)))
-                    arithmetic_mean = np.mean(safe_magnitude)
-                    if arithmetic_mean > 0:
-                        spectral_flatness = geometric_mean / arithmetic_mean
-                        # Convert to complexity score with better dynamic range
-                        # Spectral flatness ranges from 0 to 1, where 1 is white noise
-                        # For music, typical values are 0.1-0.5
-                        # Scale and clip to get better distribution
-                        features['harmonic_complexity'] = np.clip((1.0 - spectral_flatness) * 1.5, 0.0, 1.0)
-                    else:
-                        features['harmonic_complexity'] = 0.2
-                else:
-                    features['harmonic_complexity'] = 0.2
-            else:
-                features['harmonic_complexity'] = 0.2  # Default to simple
+            features['harmonic_complexity'] = self.compute_spectral_complexity(magnitude, freqs)
         
-        # Tempo estimation (simplified)
+        # Tempo estimation
         features['estimated_tempo'] = self.estimate_tempo_from_transients(drum_info)
         
-        # NEW: Enhanced harmonic features from chromagram
-        if chromagram_data is not None:
+        # Chromagram features
+        if chromagram_data is not None and len(chromagram_data) == 12:
             features['pitch_class_concentration'] = self.compute_pitch_class_concentration(chromagram_data)
             features['pitch_class_entropy'] = self.compute_pitch_class_entropy(chromagram_data)
         else:
             features['pitch_class_concentration'] = 0.5
             features['pitch_class_entropy'] = 0.5
             
-        # NEW: Chord change rate from chord history
+        # Chord change rate
         if chord_history is not None and len(chord_history) > 1:
             features['chord_change_rate'] = self.compute_chord_change_rate(chord_history)
         else:
             features['chord_change_rate'] = 0.0
             
-        # NEW: Key stability from key history
+        # Key stability
         if key_history is not None and len(key_history) > 1:
             features['key_stability'] = self.compute_key_stability(key_history)
         else:
             features['key_stability'] = 1.0
             
-        # NEW: Harmonic rhythm (chord changes per minute)
-        features['harmonic_rhythm'] = features['chord_change_rate'] * 60.0  # Assuming ~1 sec buffer
-        
-        # NEW: Tonal vs atonal ratio
-        features['tonality_score'] = self.compute_tonality_score(chromagram_data)
-        
-        # Hip-hop specific features
-        features['bass_emphasis'] = self.compute_bass_emphasis(fft_data, freqs)
+        # Genre-specific features
+        features['bass_emphasis'] = self.compute_bass_emphasis(magnitude, freqs)
         features['beat_regularity'] = self.compute_beat_regularity(drum_info)
-        features['vocal_presence'] = self.compute_vocal_presence(fft_data, freqs)
+        features['vocal_presence'] = self.compute_vocal_presence(magnitude, freqs)
+        features['high_freq_energy'] = self.compute_high_freq_energy(magnitude, freqs)
+        
+        # NEW: Metal-specific features
+        features['spectral_flux'] = self.compute_spectral_flux(magnitude)
+        features['harmonic_distortion'] = self.compute_harmonic_distortion(magnitude, freqs)
+        features['mid_frequency_dominance'] = self.compute_mid_frequency_dominance(magnitude, freqs)
+        features['power_chord_ratio'] = self.compute_power_chord_ratio(chromagram_data)
         
         return features
     
+    def compute_spectral_flux(self, magnitude: np.ndarray) -> float:
+        """Compute spectral flux - high in metal due to palm muting and fast changes"""
+        if not hasattr(self, '_prev_magnitude'):
+            self._prev_magnitude = magnitude
+            return 0.0
+            
+        # Calculate flux
+        diff = magnitude - self._prev_magnitude
+        flux = np.sum(np.maximum(0, diff))
+        
+        # Normalize
+        total_energy = np.sum(magnitude)
+        if total_energy > 0:
+            flux_normalized = flux / total_energy
+        else:
+            flux_normalized = 0.0
+            
+        # Update previous
+        self._prev_magnitude = magnitude.copy()
+        
+        return min(flux_normalized, 1.0)
+    
+    def compute_harmonic_distortion(self, magnitude: np.ndarray, freqs: np.ndarray) -> float:
+        """Estimate harmonic distortion level - very high in metal"""
+        if len(magnitude) == 0:
+            return 0.0
+            
+        # Find peaks (fundamentals)
+        peaks = []
+        for i in range(1, len(magnitude) - 1):
+            if magnitude[i] > magnitude[i-1] and magnitude[i] > magnitude[i+1]:
+                if magnitude[i] > np.mean(magnitude) * 2:  # Significant peaks
+                    peaks.append((i, magnitude[i]))
+        
+        if not peaks:
+            return 0.0
+            
+        # Sort by magnitude
+        peaks.sort(key=lambda x: x[1], reverse=True)
+        
+        # Check for harmonic series (distortion creates many harmonics)
+        distortion_score = 0.0
+        for peak_idx, peak_mag in peaks[:5]:  # Check top 5 peaks
+            if peak_idx < 5:
+                continue
+                
+            # Look for harmonics
+            harmonic_count = 0
+            for n in range(2, 6):  # Check up to 5th harmonic
+                harmonic_idx = peak_idx * n
+                if harmonic_idx < len(magnitude):
+                    # Check if there's significant energy at harmonic
+                    window = 3
+                    start = max(0, harmonic_idx - window)
+                    end = min(len(magnitude), harmonic_idx + window + 1)
+                    if np.max(magnitude[start:end]) > peak_mag * 0.1:
+                        harmonic_count += 1
+            
+            if harmonic_count >= 2:
+                distortion_score += 0.2
+        
+        return min(distortion_score, 1.0)
+    
+    def compute_mid_frequency_dominance(self, magnitude: np.ndarray, freqs: np.ndarray) -> float:
+        """Metal has strong mid frequencies (500Hz-2kHz) from distorted guitars"""
+        if len(magnitude) == 0 or len(freqs) == 0:
+            return 0.0
+            
+        # Define frequency bands
+        low_mask = (freqs >= 20) & (freqs < 500)
+        mid_mask = (freqs >= 500) & (freqs <= 2000)
+        high_mask = (freqs > 2000) & (freqs <= 8000)
+        
+        if not np.any(mid_mask):
+            return 0.0
+            
+        # Calculate energy in each band
+        low_energy = np.sum(magnitude[low_mask] ** 2) if np.any(low_mask) else 0
+        mid_energy = np.sum(magnitude[mid_mask] ** 2)
+        high_energy = np.sum(magnitude[high_mask] ** 2) if np.any(high_mask) else 0
+        
+        total_energy = low_energy + mid_energy + high_energy
+        
+        if total_energy == 0:
+            return 0.0
+            
+        # Metal has dominant mids
+        mid_ratio = mid_energy / total_energy
+        
+        # Also check that mids are stronger than both low and high
+        if mid_energy > low_energy * 1.2 and mid_energy > high_energy * 1.5:
+            return min(mid_ratio * 1.5, 1.0)
+        else:
+            return mid_ratio
+    
+    def compute_power_chord_ratio(self, chromagram: np.ndarray) -> float:
+        """Detect power chords (root + fifth) common in metal"""
+        if chromagram is None or len(chromagram) != 12:
+            return 0.0
+            
+        # Normalize chromagram
+        total = np.sum(chromagram)
+        if total == 0:
+            return 0.0
+            
+        norm_chroma = chromagram / total
+        
+        # Power chord detection: strong root and fifth, weak third
+        power_chord_score = 0.0
+        
+        # Check each possible root
+        for root in range(12):
+            fifth = (root + 7) % 12
+            third_major = (root + 4) % 12
+            third_minor = (root + 3) % 12
+            
+            # Power chord: strong root and fifth, weak thirds
+            if norm_chroma[root] > 0.1 and norm_chroma[fifth] > 0.05:
+                # Check that thirds are weak
+                if norm_chroma[third_major] < 0.03 and norm_chroma[third_minor] < 0.03:
+                    ratio = norm_chroma[fifth] / norm_chroma[root]
+                    if 0.3 < ratio < 0.8:  # Fifth should be present but not dominant
+                        power_chord_score = max(power_chord_score, norm_chroma[root] + norm_chroma[fifth])
+        
+        return min(power_chord_score * 2, 1.0)  # Scale up
+    
+    def compute_spectral_complexity(self, magnitude: np.ndarray, freqs: np.ndarray) -> float:
+        """Compute spectral complexity from magnitude spectrum"""
+        if len(magnitude) == 0:
+            return 0.3
+            
+        # Focus on harmonic range (100Hz - 4kHz)
+        harmonic_mask = (freqs >= 100) & (freqs <= 4000)
+        if not np.any(harmonic_mask):
+            return 0.3
+            
+        harmonic_mag = magnitude[harmonic_mask]
+        
+        # Calculate spectral flatness in harmonic range
+        safe_mag = harmonic_mag[harmonic_mag > 1e-10]
+        if len(safe_mag) > 0:
+            geometric_mean = np.exp(np.mean(np.log(safe_mag)))
+            arithmetic_mean = np.mean(safe_mag)
+            if arithmetic_mean > 0:
+                flatness = geometric_mean / arithmetic_mean
+                complexity = np.clip(1.0 - flatness, 0.0, 1.0)
+                return complexity
+        
+        return 0.3
+    
+    def compute_high_freq_energy(self, magnitude: np.ndarray, freqs: np.ndarray) -> float:
+        """Compute high frequency energy ratio"""
+        if len(magnitude) == 0 or len(freqs) == 0:
+            return 0.0
+            
+        high_mask = (freqs >= 4000) & (freqs <= 10000)
+        total_mask = freqs <= 10000
+        
+        if not np.any(high_mask) or not np.any(total_mask):
+            return 0.0
+            
+        high_energy = np.sum(magnitude[high_mask] ** 2)
+        total_energy = np.sum(magnitude[total_mask] ** 2)
+        
+        if total_energy > 0:
+            return high_energy / total_energy
+        return 0.0
+    
+    def classify(self, features: Dict[str, float], audio_chunk: np.ndarray = None,
+                 fft_data: np.ndarray = None, freqs: np.ndarray = None,
+                 drum_info: Dict = None) -> Dict[str, float]:
+        """Classify genre based on extracted features"""
+        genre_scores = {}
+        
+        # Use dedicated hip-hop detector for hip-hop classification
+        hip_hop_analysis = None
+        if audio_chunk is not None and fft_data is not None and freqs is not None and drum_info is not None:
+            hip_hop_analysis = self.hip_hop_detector.analyze(audio_chunk, fft_data, freqs, drum_info)
+        
+        for genre, patterns in self.genre_patterns.items():
+            # Special handling for Hip-Hop
+            if genre == 'Hip-Hop' and hip_hop_analysis is not None:
+                genre_scores[genre] = hip_hop_analysis['confidence']
+                self._last_hip_hop_analysis = hip_hop_analysis
+                continue
+            
+            score = 0.0
+            weight_sum = 0.0
+            
+            # Check each feature
+            for feature_name, pattern_value in patterns.items():
+                if feature_name == 'priority':
+                    continue
+                
+                # Skip if not a tuple
+                if not isinstance(pattern_value, tuple):
+                    continue
+                    
+                min_val, max_val = pattern_value
+                    
+                if feature_name in features:
+                    feature_val = features[feature_name]
+                    
+                    # Calculate match score
+                    if min_val <= feature_val <= max_val:
+                        score += 1.0
+                    else:
+                        # Partial score based on distance
+                        if feature_val < min_val:
+                            distance_score = max(0, 1 - (min_val - feature_val) / max(min_val, 0.1))
+                        else:
+                            distance_score = max(0, 1 - (feature_val - max_val) / max(max_val, 0.1))
+                        score += distance_score * 0.5
+                    weight_sum += 1.0
+            
+            # Calculate base score
+            if weight_sum > 0:
+                base_score = score / weight_sum
+            else:
+                base_score = 0.0
+                
+            # Apply genre-specific modifiers
+            
+            # Enhanced Metal detection
+            if genre == 'Metal':
+                metal_features = 0
+                # Check multiple metal indicators
+                if features.get('zero_crossing_rate', 0) > 0.20:
+                    metal_features += 1
+                    base_score *= 1.3
+                if features.get('harmonic_distortion', 0) > 0.5:
+                    metal_features += 1
+                    base_score *= 1.4
+                if features.get('mid_frequency_dominance', 0) > 0.6:
+                    metal_features += 1
+                    base_score *= 1.2
+                if features.get('power_chord_ratio', 0) > 0.3:
+                    metal_features += 1
+                    base_score *= 1.3
+                if features.get('spectral_flux', 0) > 0.4:
+                    metal_features += 1
+                    base_score *= 1.2
+                    
+                # Big boost if multiple metal features present
+                if metal_features >= 3:
+                    base_score *= 1.5
+                    
+                # Debug print (removed to reduce terminal spam)
+                # if metal_features >= 2:
+                #     print(f"Metal features detected: {metal_features}/5")
+                    
+            # Electronic should NOT have high distortion or ZCR
+            elif genre == 'Electronic':
+                if features.get('harmonic_distortion', 0) > 0.4:
+                    base_score *= 0.3  # Heavy penalty for distortion
+                if features.get('zero_crossing_rate', 0) > 0.18:
+                    base_score *= 0.4  # Penalty for high ZCR
+                if features.get('power_chord_ratio', 0) > 0.3:
+                    base_score *= 0.5  # Electronic doesn't use power chords
+                    
+            # Rock gets moderate boost for some metal features
+            elif genre == 'Rock':
+                if features.get('harmonic_distortion', 0) > 0.3:
+                    base_score *= 1.2
+                if features.get('mid_frequency_dominance', 0) > 0.5:
+                    base_score *= 1.1
+                    
+            # Country penalty for metal features
+            elif genre == 'Country':
+                if features.get('harmonic_distortion', 0) > 0.3:
+                    base_score *= 0.3
+                if features.get('zero_crossing_rate', 0) > 0.15:
+                    base_score *= 0.4
+                    
+            # Apply priority multiplier
+            priority = patterns.get('priority', 1.0)
+            genre_scores[genre] = base_score * priority
+        
+        # Add temporal smoothing with VERY SHORT history
+        self.genre_history.append(genre_scores)
+        
+        # Average over very short history for fast response
+        smoothed_scores = {}
+        for genre in self.genres:
+            scores = [h.get(genre, 0) for h in self.genre_history]
+            smoothed_scores[genre] = np.mean(scores) if scores else 0
+        
+        # Enhanced score differentiation
+        if smoothed_scores:
+            # Find top score
+            max_score = max(smoothed_scores.values())
+            
+            # More aggressive boosting
+            if max_score > 0:
+                sorted_genres = sorted(smoothed_scores.items(), key=lambda x: x[1], reverse=True)
+                if len(sorted_genres) >= 2:
+                    top_genre, top_score = sorted_genres[0]
+                    second_genre, second_score = sorted_genres[1]
+                    
+                    # Much more aggressive boosting
+                    if top_score > second_score * 1.1:  # If clearly ahead
+                        smoothed_scores[top_genre] *= 3.0  # Triple it
+                    else:
+                        smoothed_scores[top_genre] *= 2.0  # Double it
+        
+        # Normalize with very aggressive softmax
+        total = sum(smoothed_scores.values())
+        if total > 0:
+            # Apply aggressive temperature-scaled softmax
+            temp = 5.0  # Very high temperature for strong separation
+            exp_scores = {}
+            
+            # First normalize
+            for genre in smoothed_scores:
+                smoothed_scores[genre] /= total
+            
+            # Apply exponential scaling
+            for genre in smoothed_scores:
+                exp_scores[genre] = np.exp(smoothed_scores[genre] * temp)
+            
+            # Renormalize
+            exp_total = sum(exp_scores.values())
+            for genre in smoothed_scores:
+                smoothed_scores[genre] = exp_scores[genre] / exp_total
+                
+            # Final boost for clear winner
+            max_prob = max(smoothed_scores.values())
+            if max_prob > 0.2:  # Lower threshold
+                for genre in smoothed_scores:
+                    if smoothed_scores[genre] == max_prob:
+                        # Scale up the confidence aggressively
+                        smoothed_scores[genre] = min(0.95, max_prob * 2.0)
+                        break
+                        
+                # Renormalize one more time
+                total = sum(smoothed_scores.values())
+                for genre in smoothed_scores:
+                    smoothed_scores[genre] /= total
+        else:
+            smoothed_scores = {'Unknown': 1.0}
+        
+        return smoothed_scores
+    
+    # Include all the compute_* methods from before...
     def compute_spectral_centroid(self, freqs: np.ndarray, magnitude: np.ndarray) -> float:
-        """Calculate the spectral centroid (center of mass of spectrum)"""
+        """Calculate the spectral centroid"""
         if np.sum(magnitude) == 0:
             return 0
         return np.sum(freqs[:len(magnitude)] * magnitude) / np.sum(magnitude)
@@ -309,7 +629,6 @@ class GenreClassifier:
         """Estimate dynamic range as ratio of loud to quiet parts"""
         if len(audio_chunk) == 0:
             return 0
-        # Use percentiles to avoid outliers
         loud = np.percentile(np.abs(audio_chunk), 95)
         quiet = np.percentile(np.abs(audio_chunk), 20)
         if quiet > 0:
@@ -318,281 +637,17 @@ class GenreClassifier:
     
     def estimate_tempo_from_transients(self, drum_info: Dict) -> float:
         """Simple tempo estimation from drum hits"""
-        # This is a placeholder - real implementation would track beat intervals
         kick_detected = drum_info.get('kick', {}).get('kick_detected', False)
         if kick_detected:
-            return 120  # Default estimate
+            return 120
         return 0
     
-    def classify(self, features: Dict[str, float], audio_chunk: np.ndarray = None,
-                 fft_data: np.ndarray = None, freqs: np.ndarray = None,
-                 drum_info: Dict = None) -> Dict[str, float]:
-        """Classify genre based on extracted features"""
-        genre_scores = {}
-        
-        # Use dedicated hip-hop detector for hip-hop classification
-        hip_hop_analysis = None
-        if audio_chunk is not None and fft_data is not None and freqs is not None and drum_info is not None:
-            hip_hop_analysis = self.hip_hop_detector.analyze(audio_chunk, fft_data, freqs, drum_info)
-        
-        for genre, patterns in self.genre_patterns.items():
-            # Special handling for Hip-Hop using dedicated detector
-            if genre == 'Hip-Hop' and hip_hop_analysis is not None:
-                # Use the dedicated hip-hop detector's confidence
-                genre_scores[genre] = hip_hop_analysis['confidence']
-                # Store subgenre info for later use
-                self._last_hip_hop_analysis = hip_hop_analysis
-                continue
-            
-            score = 0.0
-            weight_sum = 0.0
-            
-            # Spectral centroid matching
-            if 'spectral_centroid' in patterns and features.get('spectral_centroid', 0) > 0:
-                min_val, max_val = patterns['spectral_centroid']
-                centroid = features['spectral_centroid']
-                if min_val <= centroid <= max_val:
-                    score += 1.0
-                else:
-                    # Partial score based on distance
-                    if centroid < min_val:
-                        score += max(0, 1 - (min_val - centroid) / min_val)
-                    else:
-                        score += max(0, 1 - (centroid - max_val) / max_val)
-                weight_sum += 1.0
-            
-            # Zero crossing rate matching
-            if 'zero_crossing_rate' in patterns and features.get('zero_crossing_rate', 0) > 0:
-                min_val, max_val = patterns['zero_crossing_rate']
-                zcr = features['zero_crossing_rate']
-                if min_val <= zcr <= max_val:
-                    score += 0.8
-                else:
-                    if zcr < min_val:
-                        score += max(0, 0.8 - (min_val - zcr) / min_val)
-                    else:
-                        score += max(0, 0.8 - (zcr - max_val) / max_val)
-                weight_sum += 0.8
-            
-            # Percussion strength matching
-            if 'percussion_strength' in patterns:
-                min_val, max_val = patterns['percussion_strength']
-                perc = features.get('percussion_strength', 0)
-                if min_val <= perc <= max_val:
-                    score += 0.9
-                else:
-                    if perc < min_val:
-                        score += max(0, 0.9 - (min_val - perc))
-                    else:
-                        score += max(0, 0.9 - (perc - max_val))
-                weight_sum += 0.9
-            
-            # Dynamic range matching
-            if 'dynamic_range' in patterns and features.get('dynamic_range', 0) > 0:
-                min_val, max_val = patterns['dynamic_range']
-                dr = features['dynamic_range']
-                if min_val <= dr <= max_val:
-                    score += 0.7
-                else:
-                    if dr < min_val:
-                        score += max(0, 0.7 - (min_val - dr))
-                    else:
-                        score += max(0, 0.7 - (dr - max_val))
-                weight_sum += 0.7
-            
-            # Check harmonic features (important for genre distinction)
-            if 'harmonic_complexity' in patterns and 'harmonic_complexity' in features:
-                min_val, max_val = patterns['harmonic_complexity']
-                harm_comp = features.get('harmonic_complexity', 0.5)
-                if min_val <= harm_comp <= max_val:
-                    score += 0.8
-                else:
-                    # Penalize being outside range
-                    if harm_comp < min_val:
-                        score += max(0, 0.8 - 2 * (min_val - harm_comp))
-                    else:
-                        score += max(0, 0.8 - 2 * (harm_comp - max_val))
-                weight_sum += 0.8
-            
-            if 'chord_change_rate' in patterns and 'chord_change_rate' in features:
-                min_val, max_val = patterns['chord_change_rate']
-                chord_rate = features.get('chord_change_rate', 0.3)
-                if min_val <= chord_rate <= max_val:
-                    score += 0.6
-                else:
-                    score += max(0, 0.6 - 2 * abs(chord_rate - (min_val + max_val) / 2))
-                weight_sum += 0.6
-            
-            if 'key_stability' in patterns and 'key_stability' in features:
-                min_val, max_val = patterns['key_stability']
-                key_stab = features.get('key_stability', 0.8)
-                if min_val <= key_stab <= max_val:
-                    score += 0.5
-                else:
-                    score += max(0, 0.5 - 2 * abs(key_stab - (min_val + max_val) / 2))
-                weight_sum += 0.5
-            
-            # Hip-hop specific features
-            if genre == 'Hip-Hop':
-                # Bass emphasis (very important for hip-hop)
-                if 'bass_emphasis' in features:
-                    bass_emp = features['bass_emphasis']
-                    if bass_emp >= 0.7:  # Strong bass
-                        score += 1.5  # Very high weight for bass
-                    else:
-                        score += max(0, 1.5 * (bass_emp / 0.7))
-                    weight_sum += 1.5
-                
-                # Beat regularity
-                if 'beat_regularity' in patterns and 'beat_regularity' in features:
-                    min_val, max_val = patterns['beat_regularity']
-                    beat_reg = features['beat_regularity']
-                    if min_val <= beat_reg <= max_val:
-                        score += 1.0
-                    else:
-                        score += max(0, 1.0 - 2 * (min_val - beat_reg))
-                    weight_sum += 1.0
-                
-                # Vocal presence
-                if 'vocal_presence' in patterns and 'vocal_presence' in features:
-                    min_val, max_val = patterns['vocal_presence']
-                    vocal = features['vocal_presence']
-                    if min_val <= vocal <= max_val:
-                        score += 0.8
-                    else:
-                        score += max(0, 0.8 - (min_val - vocal))
-                    weight_sum += 0.8
-            
-            # Classical-specific penalties (classical should NOT have these features)
-            if genre == 'Classical':
-                # Penalize classical for high bass emphasis
-                if 'bass_emphasis' in features:
-                    bass_emp = features.get('bass_emphasis', 0)
-                    if bass_emp > 0.5:  # Too much bass for classical
-                        score -= 0.8 * bass_emp
-                        weight_sum += 0.8
-                
-                # Penalize classical for high percussion
-                if features.get('percussion_strength', 0) > 0.6:
-                    score -= 0.6
-                    weight_sum += 0.6
-                
-                # Penalize classical for vocal presence in pop/hip-hop range
-                if 'vocal_presence' in features and features['vocal_presence'] > 0.7:
-                    score -= 0.5
-                    weight_sum += 0.5
-            
-            # Boost hip-hop score if multiple hip-hop features are present
-            if genre == 'Hip-Hop':
-                hip_hop_features = 0
-                if features.get('bass_emphasis', 0) > 0.6:
-                    hip_hop_features += 1
-                if features.get('beat_regularity', 0) > 0.7:
-                    hip_hop_features += 1
-                if features.get('percussion_strength', 0) > 0.8:
-                    hip_hop_features += 1
-                if features.get('key_stability', 0) > 0.9:
-                    hip_hop_features += 1
-                
-                # Synergy bonus - multiple hip-hop features together
-                if hip_hop_features >= 3:
-                    score += 0.5  # Bonus for having multiple hip-hop characteristics
-                    weight_sum += 0.5
-            
-            # Normalize score
-            if weight_sum > 0:
-                genre_scores[genre] = score / weight_sum
-            else:
-                genre_scores[genre] = 0.0
-                
-            # Apply genre-specific penalties/bonuses to avoid defaulting to Folk/Electronic
-            if genre == 'Folk':
-                # Folk should have low percussion and simple harmony
-                if features.get('percussion_strength', 0) > 0.7:
-                    genre_scores[genre] *= 0.3  # Heavy penalty for strong percussion
-                if features.get('bass_emphasis', 0) > 0.6:
-                    genre_scores[genre] *= 0.5  # Penalty for bass emphasis
-                    
-            elif genre == 'Electronic':
-                # Electronic should have steady beats and synthetic timbres
-                if features.get('harmonic_complexity', 0) > 0.5:
-                    genre_scores[genre] *= 0.6  # Penalty for complex harmony
-                if features.get('percussion_strength', 0) < 0.5:
-                    genre_scores[genre] *= 0.5  # Electronic needs beats
-        
-        # Add temporal smoothing
-        self.genre_history.append(genre_scores)
-        
-        # Average over history for stability
-        smoothed_scores = {}
-        for genre in self.genres:
-            scores = [h.get(genre, 0) for h in self.genre_history]
-            smoothed_scores[genre] = np.mean(scores) if scores else 0
-        
-        # Apply confidence boost to top genres
-        # This helps differentiate when all genres have similar low scores
-        if smoothed_scores:
-            max_score = max(smoothed_scores.values())
-            if max_score > 0 and max_score < 0.3:  # Low confidence scenario
-                # Boost top genre to make it more distinguishable
-                for genre in smoothed_scores:
-                    if smoothed_scores[genre] == max_score:
-                        smoothed_scores[genre] *= 1.5
-                        
-            # Additional check: if Hip-Hop has significant features, boost it
-            if 'Hip-Hop' in smoothed_scores:
-                hip_hop_features_present = 0
-                if features.get('bass_emphasis', 0) > 0.7:
-                    hip_hop_features_present += 1
-                if features.get('percussion_strength', 0) > 0.8:
-                    hip_hop_features_present += 1
-                if features.get('beat_regularity', 0) > 0.8:
-                    hip_hop_features_present += 1
-                    
-                if hip_hop_features_present >= 2:
-                    smoothed_scores['Hip-Hop'] *= 1.3  # Boost hip-hop when features match
-        
-        # Normalize to probabilities with better spread
-        total = sum(smoothed_scores.values())
-        if total > 0:
-            # First normalize
-            for genre in smoothed_scores:
-                smoothed_scores[genre] /= total
-                
-            # Apply softmax-like transformation to spread probabilities
-            # This prevents all genres from clustering around 10-13%
-            temp = 2.0  # Temperature parameter - higher = more spread
-            exp_scores = {}
-            for genre in smoothed_scores:
-                exp_scores[genre] = np.exp(smoothed_scores[genre] * temp)
-            
-            exp_total = sum(exp_scores.values())
-            for genre in smoothed_scores:
-                smoothed_scores[genre] = exp_scores[genre] / exp_total
-        else:
-            # If no scores, set unknown
-            smoothed_scores = {'Unknown': 1.0}
-            for genre in self.genres:
-                if genre != 'Unknown':
-                    smoothed_scores[genre] = 0.0
-        
-        return smoothed_scores
-    
-    def get_top_genres(self, probabilities: Dict[str, float], top_n: int = 3) -> List[Tuple[str, float]]:
-        """Get top N most likely genres"""
-        sorted_genres = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)
-        return sorted_genres[:top_n]
-    
-    # NEW: Harmonic feature computation methods
     def compute_pitch_class_concentration(self, chromagram: np.ndarray) -> float:
-        """Compute how concentrated the pitch classes are (0=uniform, 1=single pitch)"""
+        """Compute how concentrated the pitch classes are"""
         if chromagram is None or np.sum(chromagram) == 0:
             return 0.5
             
-        # Normalize chromagram
         norm_chroma = chromagram / np.sum(chromagram)
-        
-        # Compute Gini coefficient (measure of inequality)
         sorted_chroma = np.sort(norm_chroma)
         n = len(sorted_chroma)
         index = np.arange(1, n + 1)
@@ -601,21 +656,16 @@ class GenreClassifier:
         return gini
     
     def compute_pitch_class_entropy(self, chromagram: np.ndarray) -> float:
-        """Compute entropy of pitch class distribution (0=concentrated, 1=uniform)"""
+        """Compute entropy of pitch class distribution"""
         if chromagram is None or np.sum(chromagram) == 0:
             return 0.0
             
-        # Normalize to probability distribution
         probs = chromagram / np.sum(chromagram)
-        
-        # Compute entropy
         entropy = -np.sum(probs * np.log2(probs + 1e-10))
-        
-        # Normalize to 0-1 range (max entropy for 12 pitch classes is log2(12))
         return entropy / np.log2(12)
     
     def compute_chord_change_rate(self, chord_history: List[str]) -> float:
-        """Compute rate of chord changes (0=static, 1=constantly changing)"""
+        """Compute rate of chord changes"""
         if len(chord_history) < 2:
             return 0.0
             
@@ -625,15 +675,13 @@ class GenreClassifier:
         return changes / (len(chord_history) - 1)
     
     def compute_key_stability(self, key_history: List[str]) -> float:
-        """Compute key stability over time (0=constantly modulating, 1=stable)"""
+        """Compute key stability over time"""
         if len(key_history) < 2:
             return 1.0
             
-        # Count key changes
         changes = sum(1 for i in range(1, len(key_history)) 
                      if key_history[i] != key_history[i-1])
         
-        # Invert to get stability
         return 1.0 - (changes / (len(key_history) - 1))
     
     def compute_tonality_score(self, chromagram: np.ndarray) -> float:
@@ -641,115 +689,103 @@ class GenreClassifier:
         if chromagram is None or np.sum(chromagram) == 0:
             return 0.5
             
-        # Major and minor key profiles
         major_profile = np.array([1.0, 0.0, 0.5, 0.0, 0.7, 0.5, 0.0, 0.8, 0.0, 0.5, 0.0, 0.3])
         minor_profile = np.array([1.0, 0.0, 0.5, 0.7, 0.0, 0.5, 0.0, 0.8, 0.3, 0.0, 0.5, 0.0])
         
-        # Normalize chromagram
         norm_chroma = chromagram / (np.sum(chromagram) + 1e-10)
         
-        # Compute correlation with tonal profiles
         correlations = []
         for shift in range(12):
-            # Shift profiles to all keys
             shifted_major = np.roll(major_profile, shift)
             shifted_minor = np.roll(minor_profile, shift)
             
-            # Compute correlation
             major_corr = np.corrcoef(norm_chroma, shifted_major)[0, 1]
             minor_corr = np.corrcoef(norm_chroma, shifted_minor)[0, 1]
             
             correlations.extend([major_corr, minor_corr])
         
-        # Return maximum correlation as tonality score
         return max(0, max(correlations))
     
     def compute_bass_emphasis(self, fft_data: np.ndarray, freqs: np.ndarray) -> float:
-        """Compute how much bass (20-250Hz) dominates the spectrum"""
+        """Compute how much bass dominates the spectrum"""
         if len(fft_data) == 0 or len(freqs) == 0:
             return 0.0
         
-        # Ensure arrays have the same length
-        if len(fft_data) != len(freqs):
-            # If sizes don't match, truncate or pad to match
-            min_len = min(len(fft_data), len(freqs))
-            fft_data = fft_data[:min_len]
+        magnitude = fft_data if fft_data.ndim == 1 else np.abs(fft_data)
+        
+        if len(magnitude) != len(freqs):
+            min_len = min(len(magnitude), len(freqs))
+            magnitude = magnitude[:min_len]
             freqs = freqs[:min_len]
         
-        # Find indices for bass frequencies (20-250Hz)
         bass_mask = (freqs >= 20) & (freqs <= 250)
         mid_mask = (freqs > 250) & (freqs <= 2000)
         
         if not np.any(bass_mask) or not np.any(mid_mask):
             return 0.0
         
-        # Calculate energy in different bands
-        bass_energy = np.sum(fft_data[bass_mask] ** 2)
-        mid_energy = np.sum(fft_data[mid_mask] ** 2)
-        total_energy = np.sum(fft_data ** 2)
+        bass_energy = np.sum(magnitude[bass_mask] ** 2)
+        mid_energy = np.sum(magnitude[mid_mask] ** 2)
+        total_energy = np.sum(magnitude ** 2)
         
         if total_energy == 0:
             return 0.0
         
-        # Bass emphasis is ratio of bass to total, weighted by bass/mid ratio
         bass_ratio = bass_energy / total_energy
         bass_to_mid = bass_energy / (mid_energy + 1e-10)
         
-        # Hip-hop typically has very strong bass relative to mids
-        emphasis = bass_ratio * min(bass_to_mid / 2.0, 1.0)  # Normalize by expected ratio
+        emphasis = bass_ratio * min(bass_to_mid / 2.0, 1.0)
         
         return min(emphasis, 1.0)
     
     def compute_beat_regularity(self, drum_info: Dict) -> float:
         """Compute how regular/consistent the beat pattern is"""
-        # For now, use drum detection strength as proxy
-        # In a full implementation, this would track beat intervals
         kick_strength = drum_info.get('kick', {}).get('magnitude', 0)
         snare_strength = drum_info.get('snare', {}).get('magnitude', 0)
         
-        # Hip-hop has very strong, regular kick and snare
         if kick_strength > 0.7 and snare_strength > 0.5:
-            return 0.9  # Very regular
+            return 0.9
         elif kick_strength > 0.5 or snare_strength > 0.4:
-            return 0.7  # Somewhat regular
+            return 0.7
         else:
-            return 0.3  # Not very regular
+            return 0.3
     
     def compute_vocal_presence(self, fft_data: np.ndarray, freqs: np.ndarray) -> float:
         """Detect presence of vocals in typical vocal frequency range"""
         if len(fft_data) == 0 or len(freqs) == 0:
             return 0.0
         
-        # Ensure arrays have the same length
-        if len(fft_data) != len(freqs):
-            # If sizes don't match, truncate or pad to match
-            min_len = min(len(fft_data), len(freqs))
-            fft_data = fft_data[:min_len]
+        magnitude = fft_data if fft_data.ndim == 1 else np.abs(fft_data)
+        
+        if len(magnitude) != len(freqs):
+            min_len = min(len(magnitude), len(freqs))
+            magnitude = magnitude[:min_len]
             freqs = freqs[:min_len]
         
-        # Vocal presence frequencies (200Hz - 4kHz with emphasis on 300-3kHz)
         vocal_mask = (freqs >= 200) & (freqs <= 4000)
         core_vocal_mask = (freqs >= 300) & (freqs <= 3000)
         
         if not np.any(vocal_mask):
             return 0.0
         
-        # Look for energy concentration in vocal range
-        vocal_energy = np.sum(fft_data[vocal_mask] ** 2)
-        core_vocal_energy = np.sum(fft_data[core_vocal_mask] ** 2)
-        total_energy = np.sum(fft_data ** 2)
+        vocal_energy = np.sum(magnitude[vocal_mask] ** 2)
+        core_vocal_energy = np.sum(magnitude[core_vocal_mask] ** 2) if np.any(core_vocal_mask) else 0
+        total_energy = np.sum(magnitude ** 2)
         
         if total_energy == 0:
             return 0.0
         
-        # Vocal presence is combination of overall vocal energy and core concentration
         vocal_ratio = vocal_energy / total_energy
         core_ratio = core_vocal_energy / vocal_energy if vocal_energy > 0 else 0
         
-        # Hip-hop vocals are typically prominent and centered in core range
         presence = vocal_ratio * (0.5 + 0.5 * core_ratio)
         
-        return min(presence * 2.0, 1.0)  # Scale up as vocals are usually prominent
+        return min(presence * 2.0, 1.0)
+    
+    def get_top_genres(self, probabilities: Dict[str, float], top_n: int = 3) -> List[Tuple[str, float]]:
+        """Get top N most likely genres"""
+        sorted_genres = sorted(probabilities.items(), key=lambda x: x[1], reverse=True)
+        return sorted_genres[:top_n]
     
     def get_hip_hop_analysis(self) -> Dict[str, any]:
         """Get detailed hip-hop analysis results"""
@@ -758,6 +794,7 @@ class GenreClassifier:
         return None
 
 
+# Keep the GenreClassificationPanel class the same
 class GenreClassificationPanel:
     """OMEGA-2 Genre Classification Panel with visualization"""
     
@@ -776,7 +813,7 @@ class GenreClassificationPanel:
         
         # Storage for cross-panel data
         self.chromagram_data = None
-        self.chord_history = deque(maxlen=30)  # ~30 frames of history
+        self.chord_history = deque(maxlen=30)
         self.key_history = deque(maxlen=30)
         
         # Expose classifier and features for integrated analysis
@@ -784,6 +821,13 @@ class GenreClassificationPanel:
         self.features = {}
         self.current_genre = 'Unknown'
         self.genre_confidence = 0.0
+        
+        # Peak hold mechanism for stable display
+        self.peak_genre = 'Unknown'
+        self.peak_confidence = 0.0
+        self.peak_hold_time = 0
+        self.peak_hold_duration = 180  # Hold peak for 3 seconds at 60fps
+        self.confidence_threshold = 0.3  # Minimum confidence to consider as valid peak
         
         # Fonts will be set by main app
         self.font_large = None
@@ -802,15 +846,11 @@ class GenreClassificationPanel:
                frequencies: np.ndarray, drum_info: Dict, harmonic_info: Dict,
                chromagram_data: np.ndarray = None, current_chord: str = None,
                detected_key: str = None):
-        """Update genre classification with new audio data
-        
-        Enhanced to accept harmonic features from chromagram analysis
-        """
+        """Update genre classification with new audio data"""
         if fft_data is not None and len(fft_data) > 0 and audio_chunk is not None:
-            # Check for silence - if RMS is very low, don't classify
+            # Check for silence
             rms = np.sqrt(np.mean(audio_chunk ** 2))
-            if rms < 0.001:  # Silence threshold
-                # Reset to unknown when silent
+            if rms < 0.001:
                 self.genre_info = {
                     'genres': {'Unknown': 1.0},
                     'top_genre': 'Unknown',
@@ -822,6 +862,11 @@ class GenreClassificationPanel:
                 self.features = {}
                 self.current_genre = 'Unknown'
                 self.genre_confidence = 0.0
+                
+                # Reset peak hold on silence
+                self.peak_genre = 'Unknown'
+                self.peak_confidence = 0.0
+                self.peak_hold_time = 0
                 return
             
             # Update cross-panel data
@@ -832,7 +877,7 @@ class GenreClassificationPanel:
             if detected_key is not None:
                 self.key_history.append(detected_key)
                 
-            # Extract features with harmonic data
+            # Extract features
             features = self.classifier.extract_features(
                 fft_data, audio_chunk, frequencies, drum_info, harmonic_info,
                 self.chromagram_data,
@@ -840,7 +885,7 @@ class GenreClassificationPanel:
                 list(self.key_history)
             )
             
-            # Classify genre with enhanced hip-hop detection
+            # Classify genre
             genre_probabilities = self.classifier.classify(
                 features, audio_chunk, fft_data, frequencies, drum_info
             )
@@ -848,27 +893,79 @@ class GenreClassificationPanel:
             # Get top genres
             top_genres = self.classifier.get_top_genres(genre_probabilities, top_n=3)
             
-            # Update genre info
+            # Current detection results
+            current_genre = top_genres[0][0] if top_genres else 'Unknown'
+            current_confidence = top_genres[0][1] if top_genres else 0.0
+            
+            # Peak hold logic
+            self._update_peak_hold(current_genre, current_confidence)
+            
+            # Update genre info with peak hold values for display
             self.genre_info = {
                 'genres': genre_probabilities,
-                'top_genre': top_genres[0][0] if top_genres else 'Unknown',
-                'confidence': top_genres[0][1] if top_genres else 0.0,
+                'top_genre': self.peak_genre,  # Use peak hold value for display
+                'confidence': self.peak_confidence,  # Use peak hold confidence for display
                 'features': features,
-                'top_3': top_genres
+                'top_3': top_genres  # Keep real-time top 3 for detailed analysis
             }
             
-            # Update exposed attributes for integration
+            # Update exposed attributes (use real-time values for integration)
             self.genre_probabilities = genre_probabilities.copy()
             self.features = features.copy()
-            self.current_genre = self.genre_info['top_genre']
-            self.genre_confidence = self.genre_info['confidence']
+            self.current_genre = current_genre  # Real-time for integration
+            self.genre_confidence = current_confidence  # Real-time for integration
+    
+    def _update_peak_hold(self, current_genre: str, current_confidence: float):
+        """Update peak hold mechanism for stable genre display"""
+        # Check if current confidence is higher than peak and above threshold
+        if (current_confidence > self.peak_confidence and 
+            current_confidence >= self.confidence_threshold):
+            # New peak detected
+            self.peak_genre = current_genre
+            self.peak_confidence = current_confidence
+            self.peak_hold_time = self.peak_hold_duration
+        else:
+            # Decrement hold time
+            if self.peak_hold_time > 0:
+                self.peak_hold_time -= 1
+            else:
+                # Peak hold expired, allow gradual decay or new peaks
+                if current_confidence >= self.confidence_threshold:
+                    # Gradually update if current confidence is reasonable
+                    decay_rate = 0.02  # Slow decay rate
+                    self.peak_confidence = max(current_confidence, 
+                                             self.peak_confidence - decay_rate)
+                    if current_confidence > self.peak_confidence * 0.8:
+                        self.peak_genre = current_genre
+                else:
+                    # If confidence drops too low, reset to unknown
+                    if self.peak_confidence > 0.1:
+                        self.peak_confidence -= 0.01  # Gradual decay
+                    else:
+                        self.peak_genre = 'Unknown'
+                        self.peak_confidence = 0.0
+    
+    def reset_peak_hold(self):
+        """Reset peak hold mechanism - useful when switching songs"""
+        self.peak_genre = 'Unknown'
+        self.peak_confidence = 0.0
+        self.peak_hold_time = 0
+    
+    def get_peak_info(self) -> Dict[str, Any]:
+        """Get current peak hold information"""
+        return {
+            'peak_genre': self.peak_genre,
+            'peak_confidence': self.peak_confidence,
+            'peak_hold_time': self.peak_hold_time,
+            'is_holding_peak': self.peak_hold_time > 0
+        }
     
     def draw(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float = 1.0):
-        """OMEGA-2: Draw genre classification information"""
+        """Draw genre classification information"""
         # Semi-transparent background
         overlay = pygame.Surface((width, height))
         overlay.set_alpha(230)
-        overlay.fill((40, 30, 25))  # Brown tint for genre theme
+        overlay.fill((40, 30, 25))
         screen.blit(overlay, (x, y))
         
         # Border
@@ -911,10 +1008,18 @@ class GenreClassificationPanel:
             screen.blit(genre_surf, (x + int(20 * ui_scale), y_offset))
             y_offset += int(35 * ui_scale)
         
-        # Confidence
+        # Confidence with peak hold indicator
         if self.font_small:
             conf_text = f"Confidence: {confidence:.0%}"
-            conf_surf = self.font_small.render(conf_text, True, (200, 200, 220))
+            
+            # Add peak hold indicator
+            if self.peak_hold_time > 0:
+                conf_text += " [PEAK]"
+                conf_color = (255, 200, 100)  # Golden color for peak hold
+            else:
+                conf_color = (200, 200, 220)  # Normal color
+                
+            conf_surf = self.font_small.render(conf_text, True, conf_color)
             screen.blit(conf_surf, (x + int(20 * ui_scale), y_offset))
             y_offset += int(25 * ui_scale)
         
@@ -967,7 +1072,7 @@ class GenreClassificationPanel:
             screen.blit(features_surf, (x + int(20 * ui_scale), y_offset))
             y_offset += int(15 * ui_scale)
             
-            # Display some key features
+            # Display key features
             centroid = features.get('spectral_centroid', 0)
             if centroid > 0:
                 cent_text = f"  Brightness: {centroid:.0f} Hz"
@@ -981,10 +1086,13 @@ class GenreClassificationPanel:
             screen.blit(perc_surf, (x + int(20 * ui_scale), y_offset))
             y_offset += int(12 * ui_scale)
             
-            dr = features.get('dynamic_range', 0)
-            dr_text = f"  Dynamics: {dr:.0%}"
-            dr_surf = self.font_tiny.render(dr_text, True, (150, 150, 170))
-            screen.blit(dr_surf, (x + int(20 * ui_scale), y_offset))
+            # Add metal-specific features if Metal is detected
+            if top_genre == 'Metal' or (len(top_3) > 1 and top_3[1][0] == 'Metal'):
+                dist = features.get('harmonic_distortion', 0)
+                dist_text = f"  Distortion: {dist:.0%}"
+                dist_surf = self.font_tiny.render(dist_text, True, (150, 150, 170))
+                screen.blit(dist_surf, (x + int(20 * ui_scale), y_offset))
+                y_offset += int(12 * ui_scale)
     
     def get_results(self) -> Dict[str, Any]:
         """Get current genre classification results"""

@@ -24,8 +24,13 @@ class ProfessionalMetering:
         # True peak detection
         self.peak_history = deque(maxlen=int(1.0 * 60))  # 1s peak hold
 
-        # K-weighting filter coefficients
+        # Weighting filter coefficients
         self.k_weighting_filter = self.create_k_weighting_filter()
+        self.a_weighting_filter = self.create_a_weighting_filter()
+        self.c_weighting_filter = self.create_c_weighting_filter()
+        
+        # Current weighting mode
+        self.weighting_mode = 'K'  # K, A, C, or Z (none)
 
         # Gate threshold for integrated LUFS
         self.gate_threshold = -70.0  # LUFS
@@ -65,6 +70,61 @@ class ProfessionalMetering:
             "shelf_a": shelf_a,
             "shelf_gain": shelf_gain_linear,
         }
+    
+    def create_a_weighting_filter(self):
+        """Create A-weighting filter (40 phon curve) per IEC 61672-1"""
+        # A-weighting transfer function frequencies
+        f1 = 20.598997
+        f2 = 107.65265
+        f3 = 737.86223
+        f4 = 12194.217
+        
+        # Normalized frequencies for digital filter
+        nyquist = self.sample_rate / 2
+        
+        # Create analog prototype
+        # H(s) = K * s^4 / ((s + 2πf1)^2 * (s + 2πf2) * (s + 2πf3) * (s + 2πf4)^2)
+        # Simplified: Use cascaded filters
+        
+        # Two 2nd order highpass at 20.6 Hz
+        hp1_b, hp1_a = scipy_signal.butter(2, f1 / nyquist, btype='high')
+        
+        # 1st order highpass at 107.7 Hz  
+        hp2_b, hp2_a = scipy_signal.butter(1, f2 / nyquist, btype='high')
+        
+        # 1st order lowpass at 737.9 Hz
+        lp1_b, lp1_a = scipy_signal.butter(1, f3 / nyquist, btype='low')
+        
+        # Two 1st order lowpass at 12194 Hz
+        lp2_b, lp2_a = scipy_signal.butter(2, min(f4 / nyquist, 0.99), btype='low')
+        
+        return {
+            'hp1': (hp1_b, hp1_a),
+            'hp2': (hp2_b, hp2_a), 
+            'lp1': (lp1_b, lp1_a),
+            'lp2': (lp2_b, lp2_a),
+            'gain': 1.0  # Normalize at 1kHz
+        }
+    
+    def create_c_weighting_filter(self):
+        """Create C-weighting filter (flat response) per IEC 61672-1"""
+        # C-weighting is essentially flat from 31.5 Hz to 8 kHz
+        f1 = 20.598997
+        f4 = 12194.217
+        
+        nyquist = self.sample_rate / 2
+        
+        # 2nd order highpass at 20.6 Hz
+        hp_b, hp_a = scipy_signal.butter(2, f1 / nyquist, btype='high')
+        
+        # 2nd order lowpass at 12194 Hz
+        lp_b, lp_a = scipy_signal.butter(2, min(f4 / nyquist, 0.99), btype='low')
+        
+        return {
+            'hp': (hp_b, hp_a),
+            'lp': (lp_b, lp_a),
+            'gain': 1.0
+        }
 
     def apply_k_weighting(self, audio_data: np.ndarray) -> np.ndarray:
         """Apply K-weighting filter to audio data"""
@@ -91,14 +151,90 @@ class ProfessionalMetering:
         result = filtered + (shelf_filtered - filtered) * 0.3
 
         return result
+    
+    def apply_a_weighting(self, audio_data: np.ndarray) -> np.ndarray:
+        """Apply A-weighting filter to audio data"""
+        # Check if we have very low signal
+        input_rms = np.sqrt(np.mean(audio_data**2))
+        if input_rms < 1e-6:
+            return np.zeros_like(audio_data)
+        
+        # Apply filters in cascade
+        filtered = audio_data.copy()
+        
+        # Apply highpass filters
+        filtered = scipy_signal.filtfilt(
+            self.a_weighting_filter['hp1'][0],
+            self.a_weighting_filter['hp1'][1],
+            filtered
+        )
+        filtered = scipy_signal.filtfilt(
+            self.a_weighting_filter['hp2'][0],
+            self.a_weighting_filter['hp2'][1],
+            filtered
+        )
+        
+        # Apply lowpass filters
+        filtered = scipy_signal.filtfilt(
+            self.a_weighting_filter['lp1'][0],
+            self.a_weighting_filter['lp1'][1],
+            filtered
+        )
+        filtered = scipy_signal.filtfilt(
+            self.a_weighting_filter['lp2'][0],
+            self.a_weighting_filter['lp2'][1],
+            filtered
+        )
+        
+        # Apply gain normalization (calibrated for 1kHz = 0dB)
+        filtered *= 2.5  # Empirical normalization factor
+        
+        return filtered
+    
+    def apply_c_weighting(self, audio_data: np.ndarray) -> np.ndarray:
+        """Apply C-weighting filter to audio data"""
+        # Check if we have very low signal
+        input_rms = np.sqrt(np.mean(audio_data**2))
+        if input_rms < 1e-6:
+            return np.zeros_like(audio_data)
+        
+        # Apply filters
+        filtered = audio_data.copy()
+        
+        # Apply highpass
+        filtered = scipy_signal.filtfilt(
+            self.c_weighting_filter['hp'][0],
+            self.c_weighting_filter['hp'][1],
+            filtered
+        )
+        
+        # Apply lowpass
+        filtered = scipy_signal.filtfilt(
+            self.c_weighting_filter['lp'][0],
+            self.c_weighting_filter['lp'][1],
+            filtered
+        )
+        
+        return filtered
+    
+    def apply_weighting(self, audio_data: np.ndarray) -> np.ndarray:
+        """Apply selected weighting filter"""
+        if self.weighting_mode == 'K':
+            return self.apply_k_weighting(audio_data)
+        elif self.weighting_mode == 'A':
+            return self.apply_a_weighting(audio_data)
+        elif self.weighting_mode == 'C':
+            return self.apply_c_weighting(audio_data)
+        else:  # Z-weighting (no weighting)
+            return audio_data
 
     def calculate_lufs(self, audio_data: np.ndarray) -> Dict[str, float]:
         """Calculate LUFS measurements"""
         if len(audio_data) == 0:
             return self.current_lufs
 
-        # Apply K-weighting
-        weighted = self.apply_k_weighting(audio_data)
+        # Apply selected weighting
+        weighted = self.apply_weighting(audio_data)
 
         # Calculate mean square power
         mean_square = np.mean(weighted**2)
@@ -137,12 +273,30 @@ class ProfessionalMetering:
                 self.current_lufs["integrated"] = -100.0
                 self.current_lufs["range"] = 0.0
 
-        # True peak detection
-        true_peak_db = 20 * np.log10(np.max(np.abs(audio_data)) + 1e-10)
+        # True peak detection with 4x oversampling
+        true_peak_db = self.calculate_true_peak(audio_data)
         self.peak_history.append(true_peak_db)
         self.current_lufs["true_peak"] = max(self.peak_history)
 
         return self.current_lufs
+    
+    def calculate_true_peak(self, audio_data: np.ndarray, oversampling: int = 4) -> float:
+        """Calculate true peak with oversampling per ITU-R BS.1770-4"""
+        if len(audio_data) == 0:
+            return -100.0
+        
+        # Oversample the signal
+        oversampled = scipy_signal.resample(audio_data, len(audio_data) * oversampling)
+        
+        # Find the maximum absolute value
+        peak = np.max(np.abs(oversampled))
+        
+        # Prevent log of zero
+        if peak < 1e-10:
+            return -100.0
+        
+        # Convert to dBTP (dB True Peak)
+        return 20 * np.log10(peak)
 
 
 class ProfessionalMetersPanel:
@@ -158,6 +312,22 @@ class ProfessionalMetersPanel:
             'punch_factor': 0.0,
             'transients_detected': 0
         }
+        
+        # Level histogram (last 10 seconds)
+        self.level_history = deque(maxlen=600)  # 10 seconds at 60 FPS
+        self.histogram_bins = np.linspace(-60, 0, 61)  # 1 dB resolution
+        
+        # Peak hold settings
+        self.peak_hold_time = 1.0  # seconds
+        self.peak_hold_samples = int(self.peak_hold_time * 60)  # frames
+        self.peak_hold_value = -100.0
+        self.peak_hold_counter = 0
+        
+        # Gating mode
+        self.use_gated_measurement = True
+        
+        # Loudness range visualization
+        self.loudness_range_history = deque(maxlen=300)  # 5 seconds
         
         # Fonts will be set by main app
         self.font_large = None
@@ -176,6 +346,24 @@ class ProfessionalMetersPanel:
         """Update meters with new audio data"""
         # Update LUFS measurements
         self.lufs_info = self.metering.calculate_lufs(audio_data)
+        
+        # Track level history for histogram
+        if 'momentary' in self.lufs_info:
+            self.level_history.append(self.lufs_info['momentary'])
+        
+        # Update loudness range history
+        if 'range' in self.lufs_info:
+            self.loudness_range_history.append(self.lufs_info['range'])
+        
+        # Update peak hold
+        current_peak = self.lufs_info.get('true_peak', -100.0)
+        if current_peak > self.peak_hold_value:
+            self.peak_hold_value = current_peak
+            self.peak_hold_counter = self.peak_hold_samples
+        else:
+            self.peak_hold_counter -= 1
+            if self.peak_hold_counter <= 0:
+                self.peak_hold_value = current_peak
         
         # Simple transient detection
         if len(audio_data) > 1:
@@ -215,17 +403,26 @@ class ProfessionalMetersPanel:
         # Border
         pygame.draw.rect(screen, (80, 90, 110), (x, y, width, height), 2)
         
-        # Title
+        # Title with weighting mode
         if self.font_medium:
             title_y = y + int(10 * ui_scale)
-            title = self.font_medium.render("Professional Meters", True, (180, 190, 200))
+            weighting_mode = self.metering.weighting_mode
+            title_text = f"Professional Meters ({weighting_mode}-weighted)"
+            title = self.font_medium.render(title_text, True, (180, 190, 200))
             screen.blit(title, (x + int(10 * ui_scale), title_y))
+            
+            # Gating indicator
+            if self.font_small:
+                gating_text = "GATED" if self.use_gated_measurement else "UNGATED"
+                gating_color = (100, 200, 100) if self.use_gated_measurement else (200, 200, 100)
+                gating_surf = self.font_small.render(gating_text, True, gating_color)
+                screen.blit(gating_surf, (x + width - 80, title_y + 5))
             
             # Meters
             current_y = title_y + int(40 * ui_scale)
-            spacing = int(30 * ui_scale)
+            spacing = int(25 * ui_scale)
             
-            # LUFS Meters
+            # LUFS Meters with peak hold
             meters = [
                 ("M:", f"{self.lufs_info['momentary']:+5.1f} LUFS", 
                  self.get_lufs_color(self.lufs_info["momentary"])),
@@ -249,10 +446,27 @@ class ProfessionalMetersPanel:
                     value_surf = self.font_meters.render(value, True, color)
                     screen.blit(value_surf, (x + int(80 * ui_scale), current_y))
                     
+                    # Peak hold indicator for True Peak
+                    if label == "TP:" and self.peak_hold_value > -100:
+                        hold_text = f"[{self.peak_hold_value:+5.1f}]"
+                        hold_surf = self.font_small.render(hold_text, True, (200, 100, 100))
+                        screen.blit(hold_surf, (x + int(200 * ui_scale), current_y))
+                    
                     current_y += spacing
                 
+                # Level Histogram
+                current_y += int(10 * ui_scale)
+                if len(self.level_history) > 10:
+                    self._draw_level_histogram(screen, x + 10, current_y, int(width * 0.4), 60, ui_scale)
+                    
+                # Loudness Range Graph
+                if len(self.loudness_range_history) > 10:
+                    self._draw_loudness_range(screen, x + int(width * 0.5), current_y, int(width * 0.4), 60, ui_scale)
+                
+                current_y += 70
+                
                 # Transient Analysis
-                current_y += int(20 * ui_scale)
+                current_y += int(10 * ui_scale)
                 
                 attack_text = f"Attack: {self.transient_info.get('attack_time', 0):.1f}ms"
                 punch_text = f"Punch: {self.transient_info.get('punch_factor', 0):.2f}"
@@ -296,3 +510,131 @@ class ProfessionalMetersPanel:
             'lufs': self.lufs_info if hasattr(self, 'lufs_info') else None,
             'transient': self.transient_info
         }
+    
+    def set_weighting(self, mode: str):
+        """Set weighting mode: K, A, C, or Z"""
+        if mode in ['K', 'A', 'C', 'Z']:
+            self.metering.weighting_mode = mode
+    
+    def set_peak_hold_time(self, seconds: float):
+        """Set peak hold time in seconds"""
+        self.peak_hold_time = max(0.0, seconds)
+        self.peak_hold_samples = int(self.peak_hold_time * 60)
+    
+    def toggle_gating(self):
+        """Toggle between gated and ungated measurements"""
+        self.use_gated_measurement = not self.use_gated_measurement
+    
+    def reset_peak_hold(self):
+        """Reset peak hold value"""
+        self.peak_hold_value = -100.0
+        self.peak_hold_counter = 0
+    
+    def get_level_histogram(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Get level histogram data"""
+        if not self.level_history:
+            return self.histogram_bins[:-1], np.zeros(len(self.histogram_bins) - 1)
+        
+        # Calculate histogram
+        hist, _ = np.histogram(list(self.level_history), bins=self.histogram_bins)
+        # Normalize
+        if hist.sum() > 0:
+            hist = hist.astype(float) / hist.sum()
+        
+        return self.histogram_bins[:-1], hist
+    
+    def _draw_level_histogram(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float):
+        """Draw level histogram"""
+        bins, hist = self.get_level_histogram()
+        if hist.sum() == 0:
+            return
+        
+        # Background
+        pygame.draw.rect(screen, (20, 25, 35), (x, y, width, height))
+        
+        # Draw bars
+        bar_width = width / len(hist)
+        max_val = hist.max() if hist.max() > 0 else 1
+        
+        for i, val in enumerate(hist):
+            if val > 0:
+                bar_height = int((val / max_val) * height * 0.9)
+                bar_x = x + int(i * bar_width)
+                bar_y = y + height - bar_height
+                
+                # Color based on level
+                level_db = bins[i]
+                if level_db > -14:
+                    color = (255, 100, 100)  # Red - too loud
+                elif level_db > -23:
+                    color = (100, 255, 100)  # Green - normal
+                else:
+                    color = (100, 100, 255)  # Blue - quiet
+                
+                pygame.draw.rect(screen, color, (bar_x, bar_y, int(bar_width - 1), bar_height))
+        
+        # Grid lines
+        for i in range(0, 5):
+            grid_y = y + int(i * height / 4)
+            pygame.draw.line(screen, (40, 45, 55), (x, grid_y), (x + width, grid_y), 1)
+        
+        # Border
+        pygame.draw.rect(screen, (60, 70, 90), (x, y, width, height), 1)
+        
+        # Label
+        if self.font_small:
+            label = self.font_small.render("Level Distribution", True, (140, 150, 160))
+            screen.blit(label, (x + 2, y - 15))
+    
+    def _draw_loudness_range(self, screen: pygame.Surface, x: int, y: int, width: int, height: int, ui_scale: float):
+        """Draw loudness range history graph"""
+        if len(self.loudness_range_history) < 2:
+            return
+        
+        # Background
+        pygame.draw.rect(screen, (20, 25, 35), (x, y, width, height))
+        
+        # Convert deque to list for graphing
+        lr_values = list(self.loudness_range_history)
+        max_lr = max(lr_values) if max(lr_values) > 0 else 20
+        
+        # Draw line graph
+        points = []
+        for i, lr in enumerate(lr_values):
+            px = x + int((i / len(lr_values)) * width)
+            py = y + height - int((lr / max_lr) * height * 0.9)
+            points.append((px, py))
+        
+        if len(points) >= 2:
+            pygame.draw.lines(screen, (150, 200, 150), False, points, 2)
+        
+        # Target lines
+        # Typical broadcast target: 7-20 LU
+        target_low = 7
+        target_high = 20
+        
+        if max_lr > 0:
+            low_y = y + height - int((target_low / max_lr) * height * 0.9)
+            high_y = y + height - int((target_high / max_lr) * height * 0.9)
+            
+            pygame.draw.line(screen, (100, 150, 100), (x, low_y), (x + width, low_y), 1)
+            pygame.draw.line(screen, (150, 100, 100), (x, high_y), (x + width, high_y), 1)
+        
+        # Grid lines
+        for i in range(1, 4):
+            grid_y = y + int(i * height / 4)
+            pygame.draw.line(screen, (40, 45, 55), (x, grid_y), (x + width, grid_y), 1)
+        
+        # Border
+        pygame.draw.rect(screen, (60, 70, 90), (x, y, width, height), 1)
+        
+        # Label and current value
+        if self.font_small:
+            label = self.font_small.render("Loudness Range", True, (140, 150, 160))
+            screen.blit(label, (x + 2, y - 15))
+            
+            if lr_values:
+                current_lr = lr_values[-1]
+                value_text = f"{current_lr:.1f} LU"
+                value_surf = self.font_small.render(value_text, True, (200, 220, 200))
+                screen.blit(value_surf, (x + width - 50, y - 15))

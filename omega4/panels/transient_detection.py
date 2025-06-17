@@ -57,8 +57,10 @@ class TransientDetectionPanel:
         self.update_interval = 1  # Update every frame for responsiveness
         
         # Detection parameters
-        self.sensitivity = 2.0  # Adjustable sensitivity
+        self.sensitivity = 1.5  # Lower threshold for better detection
         self.prev_envelope = 0.0
+        self.attack_threshold = 0.1  # Minimum attack time for transient
+        self.spectral_flux_history = deque(maxlen=10)  # For spectral flux detection
     
     def set_fonts(self, fonts):
         """Set fonts for rendering"""
@@ -119,8 +121,8 @@ class TransientDetectionPanel:
         return np.mean(envelope)
     
     def _detect_transient(self, audio_data):
-        """Detect transients using spectral flux method"""
-        # Simple energy-based detection with derivative
+        """Detect transients using improved spectral flux method"""
+        # Method 1: Energy-based detection with derivative
         current_energy = np.sum(audio_data**2)
         
         # Check for sudden energy increase
@@ -129,10 +131,32 @@ class TransientDetectionPanel:
             
             if energy_ratio > self.sensitivity:
                 self.transient_detected = True
-                self.transient_strength = min(1.0, (energy_ratio - 1.0) / 3.0)
+                self.transient_strength = min(1.0, (energy_ratio - 1.0) / 2.0)
             else:
                 self.transient_detected = False
-                self.transient_strength *= 0.9  # Decay
+                self.transient_strength *= 0.85  # Slower decay
+        
+        # Method 2: Spectral flux detection
+        if len(audio_data) >= 512:
+            # Compute spectrum
+            window = np.hanning(min(512, len(audio_data)))
+            windowed = audio_data[:len(window)] * window
+            spectrum = np.abs(np.fft.rfft(windowed))
+            
+            # Calculate spectral flux
+            if len(self.spectral_flux_history) > 0:
+                prev_spectrum = self.spectral_flux_history[-1]
+                if len(spectrum) == len(prev_spectrum):
+                    # Positive spectral flux
+                    flux = np.sum(np.maximum(0, spectrum - prev_spectrum))
+                    avg_flux = np.mean([np.sum(s) for s in self.spectral_flux_history])
+                    
+                    if avg_flux > 0 and flux > avg_flux * 1.8:  # Threshold for flux
+                        self.transient_detected = True
+                        self.transient_strength = max(self.transient_strength, 
+                                                    min(1.0, flux / (avg_flux * 3)))
+            
+            self.spectral_flux_history.append(spectrum[:128])  # Store first 128 bins
         
         self.prev_envelope = self.envelope
         
@@ -229,74 +253,95 @@ class TransientDetectionPanel:
             # Decay time in ms
             self.decay_time = (end_idx - peak_idx) * 1000 / self.sample_rate
     
-    def draw(self, screen, x, y, width, panel_color=None):
+    def draw(self, screen, x, y, width, height=None, panel_color=None):
         """Draw the transient detection panel"""
         if not self.fonts:
             return
         
-        # Panel background
-        if panel_color is None:
-            panel_color = self.bg_color
+        # Use provided height or default
+        if height is None:
+            height = self.panel_height
+            
+        # Semi-transparent background (matching genre classification style)
+        overlay = pygame.Surface((width, height))
+        overlay.set_alpha(230)
+        overlay.fill((25, 30, 40))  # Blue tint for transient theme
+        screen.blit(overlay, (x, y))
         
-        panel_rect = pygame.Rect(x, y, width, self.panel_height)
-        pygame.draw.rect(screen, panel_color, panel_rect)
-        pygame.draw.rect(screen, (100, 100, 100), panel_rect, 1)
+        # Border
+        pygame.draw.rect(screen, (80, 120, 160), (x, y, width, height), 2)
         
-        # Title
+        # Title with increased padding (matching genre classification)
+        y_offset = y + 20
         title = "Transient Detection"
         if self.is_frozen:
             title += " [FROZEN]"
-        title_surface = self.fonts['small'].render(title, True, (255, 255, 255))
-        screen.blit(title_surface, (x + 10, y + 5))
+        title_surface = self.fonts.get('medium', self.fonts['small']).render(title, True, (180, 220, 255))
+        screen.blit(title_surface, (x + 20, y_offset))
+        y_offset += 35
         
-        # Transient indicator
-        indicator_x = x + width - 100
-        indicator_y = y + 5
+        # Transient indicator with detection type
         if self.transient_detected:
-            # Flash indicator
-            radius = int(6 + self.transient_strength * 4)
+            # Large visual indicator
+            indicator_size = 50
+            indicator_x = x + width - indicator_size - 20
             pygame.draw.circle(screen, self.transient_color, 
-                             (indicator_x, indicator_y + 8), radius)
+                             (indicator_x, y_offset + 20), 
+                             int(15 + self.transient_strength * 10))
             
             # Type text
-            type_surface = self.fonts['tiny'].render(self.transient_type, 
-                                                   True, (200, 200, 200))
-            screen.blit(type_surface, (indicator_x + 15, indicator_y))
+            type_surface = self.fonts.get('large', self.fonts['medium']).render(
+                self.transient_type, True, (220, 220, 220)
+            )
+            screen.blit(type_surface, (x + 20, y_offset))
+        else:
+            # No transient text
+            no_trans_surface = self.fonts['small'].render(
+                "No transient", True, (120, 120, 120)
+            )
+            screen.blit(no_trans_surface, (x + 20, y_offset))
         
-        # Level meters section
-        meter_y = y + 30
-        meter_height = 8
-        meter_width = width // 3 - 20
+        y_offset += 50
+        
+        # Level meters section with more spacing
+        meter_height = 12
+        meter_width = width - 40
+        meter_spacing = 25
         
         # Peak level meter
-        self._draw_level_meter(screen, x + 10, meter_y, meter_width, meter_height,
-                             self.peak_level, "Peak", self.peak_color)
+        self._draw_level_meter(screen, x + 20, y_offset, meter_width, meter_height,
+                             self.peak_level, "Peak Level", self.peak_color)
+        y_offset += meter_spacing
         
         # RMS level meter
-        self._draw_level_meter(screen, x + 10, meter_y + 15, meter_width, meter_height,
-                             self.rms_level, "RMS", self.envelope_color)
+        self._draw_level_meter(screen, x + 20, y_offset, meter_width, meter_height,
+                             self.rms_level, "RMS Level", self.envelope_color)
+        y_offset += meter_spacing
         
-        # Crest factor display
-        crest_text = f"Crest: {self.crest_factor:.1f} dB"
-        crest_surface = self.fonts['tiny'].render(crest_text, True, (150, 150, 150))
-        screen.blit(crest_surface, (x + 10, meter_y + 30))
+        # Crest factor and timing info
+        info_y = y_offset
+        crest_text = f"Crest Factor: {self.crest_factor:.1f} dB"
+        crest_surface = self.fonts['small'].render(crest_text, True, (180, 180, 180))
+        screen.blit(crest_surface, (x + 20, info_y))
         
-        # Attack/Decay times
         if self.transient_detected:
             timing_text = f"Attack: {self.attack_time:.1f}ms / Decay: {self.decay_time:.1f}ms"
-            timing_surface = self.fonts['tiny'].render(timing_text, True, (150, 150, 150))
-            screen.blit(timing_surface, (x + meter_width + 30, meter_y))
+            timing_surface = self.fonts['small'].render(timing_text, True, (180, 180, 180))
+            screen.blit(timing_surface, (x + 20, info_y + 20))
         
-        # Envelope and transient history graph
-        graph_y = y + 80
-        graph_height = 60
-        graph_width = width - 20
-        self._draw_history_graph(screen, x + 10, graph_y, graph_width, graph_height)
+        y_offset += 50
         
-        # Band energy visualization
-        band_x = x + width - 150
-        band_y = y + 35
-        self._draw_band_energies(screen, band_x, band_y, 140, 40)
+        # Envelope and transient history graph - use more vertical space
+        graph_height = min(120, height - (y_offset - y) - 80)
+        graph_width = width - 40
+        if graph_height > 40:
+            self._draw_history_graph(screen, x + 20, y_offset, graph_width, graph_height)
+            y_offset += graph_height + 20
+        
+        # Band energy visualization at bottom
+        band_height = min(60, height - (y_offset - y) - 20)
+        if band_height > 30:
+            self._draw_band_energies(screen, x + 20, y_offset, width - 40, band_height)
     
     def _draw_level_meter(self, screen, x, y, width, height, level, label, color):
         """Draw a level meter"""

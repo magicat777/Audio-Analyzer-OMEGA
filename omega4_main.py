@@ -52,10 +52,16 @@ from omega4.panels.integrated_music_panel import IntegratedMusicPanel
 from omega4.panels.voice_detection import VoiceDetectionPanel
 from omega4.panels.phase_correlation import PhaseCorrelationPanel
 from omega4.panels.transient_detection import TransientDetectionPanel
+from omega4.panels.performance_profiler import PerformanceProfilerPanel
 
 # Import optimization modules
 from omega4.optimization.adaptive_updater import AdaptiveUpdater
 from omega4.optimization import get_cached_fft, cache_fft_result, PrecomputedFrequencyMapper
+from omega4.optimization.batched_fft_processor import get_batched_fft_processor
+from omega4.optimization.performance_tracker import track_time, track_panel
+
+# Import UI components
+from omega4.ui import TechnicalPanelCanvas
 
 # Import analyzers
 from omega4.analyzers import (
@@ -134,6 +140,9 @@ class ProfessionalLiveAudioAnalyzer:
         self.phase_correlation_panel = PhaseCorrelationPanel(SAMPLE_RATE)
         self.transient_detection_panel = TransientDetectionPanel(SAMPLE_RATE)
         
+        # Performance monitoring
+        self.performance_profiler = PerformanceProfilerPanel()
+        
         # Analyzers (keep existing ones)
         self.phase_analyzer = PhaseCoherenceAnalyzer(SAMPLE_RATE)
         self.transient_analyzer = TransientAnalyzer(SAMPLE_RATE)
@@ -167,6 +176,10 @@ class ProfessionalLiveAudioAnalyzer:
         self.current_allocation = 0.75
         # Use pre-computed band indices from frequency mapper
         self.band_indices = self.freq_mapper.mapping.band_indices
+        
+        # Initialize batched FFT processor for optimized GPU usage
+        self.batched_fft = get_batched_fft_processor()
+        self.fft_request_ids = {}  # Track FFT requests per panel
 
         # Pygame setup with professional UI
         pygame.init()
@@ -267,28 +280,36 @@ class ProfessionalLiveAudioAnalyzer:
         })
         
         self.transient_detection_panel.set_fonts({
+            'large': self.font_large,
+            'medium': self.font_medium,
             'small': self.font_small,
             'tiny': self.font_tiny
         })
+        
+        self.performance_profiler.set_fonts({
+            'large': self.font_large,
+            'medium': self.font_medium,
+            'small': self.font_small
+        })
 
-        # Professional UI panels - All visible by default
-        self.show_meters = True
-        self.show_vu_meters = True  # VU meters shown by default
-        self.show_bass_zoom = True
-        self.show_harmonic = True
-        self.show_room_analysis = True
-        self.show_pitch_detection = True
-        self.show_chromagram = False  # Disabled - using integrated panel instead
-        self.show_genre_classification = False  # Disabled - using integrated panel instead
-        self.show_integrated_music = True  # Integrated music analysis panel (preferred)
+        # Professional UI panels - All managed by canvas now
+        self.show_meters = False  # Now in canvas
+        self.show_vu_meters = True  # Always show on right side
+        self.show_bass_zoom = True  # Keep bass zoom outside canvas (full width)
+        self.show_harmonic = False  # Now in canvas
+        self.show_room_analysis = False  # Disabled for testing
+        self.show_pitch_detection = False  # Now in canvas
+        self.show_chromagram = False  # Now in canvas
+        self.show_genre_classification = False  # Now in canvas
+        self.show_integrated_music = False  # Now in canvas
         self.show_debug = False  # Debug snapshots triggered by 'D' key
-        self.show_voice_detection = True  # Now enabled with proper panel
+        self.show_voice_detection = False  # Now in canvas
         self.show_formant = False
         self.show_advanced_voice = False
         self.show_fps = True
         self.show_stats = True
-        self.show_phase = True  # Now enabled with proper panel
-        self.show_transient = True  # Now enabled with proper panel
+        self.show_phase = False  # Now in canvas
+        self.show_transient = False  # Now in canvas
         self.show_grid = True
         
         # Frozen/paused states for panels (when True, panel doesn't update)
@@ -305,7 +326,7 @@ class ProfessionalLiveAudioAnalyzer:
         self.frozen_phase_correlation = False
         self.frozen_transient_detection = False
         self.fullscreen = False
-        self.test_mode = False  # Auto-test all panels
+        # self.test_mode = False  # Auto-test all panels - disabled (obsolete freeze functionality)
 
         # Bass detail enhancement
         self.bass_detail_factor = 1.2  # Additional bass resolution
@@ -366,8 +387,76 @@ class ProfessionalLiveAudioAnalyzer:
         # Window sizing control
         self.preset_locked = False  # Lock window size when using number key presets
         
+        # Initialize technical panel canvas
+        self._init_panel_canvas()
+        
         # Initialize running state
         self.running = True
+
+    def _init_panel_canvas(self):
+        """Initialize the technical panel canvas"""
+        # Calculate canvas position and dimensions
+        # Canvas starts below main spectrum and bass zoom
+        canvas_x = 50  # Match spectrum left margin
+        canvas_width = self.width - 100  # Match spectrum width with margins
+        
+        # Canvas will be positioned dynamically based on what's above it
+        self.panel_canvas = TechnicalPanelCanvas(
+            canvas_x, 
+            0,  # Y position will be set dynamically
+            canvas_width, 
+            padding=10
+        )
+        
+        # Register all panels with the canvas
+        self.panel_canvas.register_panel('professional_meters', self.professional_meters_panel)
+        # VU meters are now drawn separately on the right side, not in canvas
+        # self.panel_canvas.register_panel('vu_meters', self.vu_meters_panel)
+        self.panel_canvas.register_panel('bass_zoom', self.bass_zoom_panel)
+        self.panel_canvas.register_panel('harmonic_analysis', self.harmonic_analysis_panel)
+        self.panel_canvas.register_panel('pitch_detection', self.pitch_detection_panel)
+        self.panel_canvas.register_panel('chromagram', self.chromagram_panel)
+        self.panel_canvas.register_panel('genre_classification', self.genre_classification_panel)
+        self.panel_canvas.register_panel('integrated_music', self.integrated_music_panel)
+        self.panel_canvas.register_panel('voice_detection', self.voice_detection_panel)
+        self.panel_canvas.register_panel('phase_correlation', self.phase_correlation_panel)
+        self.panel_canvas.register_panel('transient_detection', self.transient_detection_panel)
+        # Room analysis will be handled separately as it has custom drawing
+        
+        # Start with no panels visible (they'll be toggled via hotkeys)
+        self.canvas_panels_visible = False
+    
+    def _update_window_for_canvas(self):
+        """Update window height based on canvas content"""
+        # Calculate required height matching actual layout
+        header_height = 120  # Title and info
+        top_margin = 10
+        spectrum_height = 800  # Actual spectrum height
+        scale_space = 40  # Space for frequency scale + gap
+        bass_zoom_height = 250 if self.show_bass_zoom else 0
+        bass_zoom_padding = 10 if self.show_bass_zoom else 0
+        canvas_height = self.panel_canvas.get_total_height()
+        footer_height = 80  # Footer info
+        extra_padding = 40  # Extra padding to ensure footer is visible
+        
+        required_height = (
+            header_height + top_margin + spectrum_height + scale_space +
+            bass_zoom_height + bass_zoom_padding + canvas_height + 
+            footer_height + extra_padding
+        )
+        
+        # Debug print
+        if hasattr(self, '_last_canvas_height') and self._last_canvas_height != canvas_height:
+            print(f"Canvas height changed: {self._last_canvas_height} -> {canvas_height}")
+            print(f"Required window height: {required_height}")
+        self._last_canvas_height = canvas_height
+        
+        # Only resize if needed
+        if required_height != self.height and not self.preset_locked:
+            print(f"Resizing window: {self.height} -> {required_height}")
+            self.height = max(required_height, 1150)  # Minimum height
+            self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
+            self.display.update_dimensions(self.width, self.height)
 
     def update_fonts(self, width):
         """Update font sizes based on window width"""
@@ -773,7 +862,7 @@ class ProfessionalLiveAudioAnalyzer:
         return compensated
 
     def process_audio_spectrum(self):
-        """Main audio processing with multi-resolution FFT"""
+        """Main audio processing with batched GPU FFT"""
         if self.buffer_pos < FFT_SIZE_BASE:
             return None
         
@@ -790,8 +879,6 @@ class ProfessionalLiveAudioAnalyzer:
                 self.ring_buffer[:self.buffer_pos]
             ])
         
-        # Debug will be handled by comprehensive debug output
-        
         # Auto-adjust gain
         self.auto_adjust_gain(audio_window)
         
@@ -799,19 +886,46 @@ class ProfessionalLiveAudioAnalyzer:
         window = np.hanning(len(audio_window))
         audio_windowed = audio_window * window
         
-        # Multi-resolution FFT processing
-        multi_spectrum = self.process_multi_resolution_fft(audio_windowed)
+        # ===== BATCHED FFT PROCESSING =====
+        # Prepare all FFT requests for this frame
         
-        # Debug will be handled by comprehensive debug output
+        # Main spectrum FFT
+        main_fft_id = self.batched_fft.prepare_batch('main_spectrum', audio_windowed, FFT_SIZE_BASE)
+        
+        # Integrated music panel FFT (if active)
+        music_fft_id = None
+        if ('integrated_music' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_integrated_music and self.adaptive_updater.should_update('integrated_music')):
+            analysis_fft_size = 4096
+            if len(audio_windowed) < analysis_fft_size:
+                analysis_audio = np.pad(audio_windowed, (0, analysis_fft_size - len(audio_windowed)), mode='constant')
+            else:
+                analysis_audio = audio_windowed[-analysis_fft_size:]
+            music_fft_id = self.batched_fft.prepare_batch('integrated_music', analysis_audio, analysis_fft_size)
+        
+        # Process all FFTs in single GPU batch
+        num_processed = self.batched_fft.process_batch()
+        
+        # Retrieve results
+        fft_results = self.batched_fft.distribute_results()
+        
+        # Get main spectrum result
+        main_result = fft_results.get(main_fft_id, None)
+        if main_result is None:
+            # Fallback to CPU if batch processing failed
+            fft_complex = np.fft.rfft(audio_windowed)
+            spectrum = np.abs(fft_complex)
+        else:
+            fft_complex = main_result['complex']
+            spectrum = main_result['magnitude']
+        
+        # Multi-resolution processing (still use existing for now, can be optimized later)
+        multi_spectrum = self.process_multi_resolution_fft(audio_windowed)
         
         # Update content detection
         self.update_content_type(multi_spectrum, audio_windowed)
         
-        # Process spectrum data
-        # Compute FFT for phase information
-        fft_complex = np.fft.rfft(audio_windowed)
-        
-        # Use the spectrum directly
+        # Use the multi-resolution spectrum
         spectrum = multi_spectrum
         
         # Debug will be handled by comprehensive debug output
@@ -898,30 +1012,36 @@ class ProfessionalLiveAudioAnalyzer:
         drum_events = self.drum_detector.process_audio(spectrum_data['spectrum'], spectrum_data['band_values'])
         spectrum_data['drum_events'] = drum_events
         
-        # Update meters (only if not frozen and adaptive updater allows)
+        # Update meters (only if visible in canvas, not frozen and adaptive updater allows)
         dt = 1.0 / TARGET_FPS  # Frame time
-        if not self.frozen_meters and self.adaptive_updater.should_update('meters'):
+        if ('professional_meters' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_meters and self.adaptive_updater.should_update('meters')):
             self.professional_meters_panel.update(audio_windowed)
-        if not self.frozen_vu_meters and self.adaptive_updater.should_update('vu_meters'):
+        # Update VU meters if not frozen (now outside canvas system)
+        if (self.show_vu_meters and 
+            not self.frozen_vu_meters and self.adaptive_updater.should_update('vu_meters')):
             self.vu_meters_panel.update(audio_windowed, dt)
         
-        # Update other panels (only if visible and not frozen and adaptive updater allows)
+        # Update other panels (only if visible in canvas and not frozen and adaptive updater allows)
         harmonic_info = {}
-        if self.show_harmonic and not self.frozen_harmonic and self.adaptive_updater.should_update('harmonic'):
-            self.harmonic_analysis_panel.update(spectrum_data['spectrum'], freq_array)
+        if ('harmonic_analysis' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_harmonic and self.adaptive_updater.should_update('harmonic')):
+            self.harmonic_analysis_panel.update(spectrum_data['spectrum'], freq_array, audio_windowed)
             # Extract harmonic info from the panel if available
             if hasattr(self.harmonic_analysis_panel, 'harmonic_info'):
                 harmonic_info = self.harmonic_analysis_panel.harmonic_info
         
-        if self.show_pitch_detection and not self.frozen_pitch_detection and self.adaptive_updater.should_update('pitch_detection'):
+        if ('pitch_detection' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_pitch_detection and self.adaptive_updater.should_update('pitch_detection')):
             self.pitch_detection_panel.update(audio_windowed)
         # Update chromagram with genre context if available
         current_genre = None
         if hasattr(self, 'genre_classification_panel') and hasattr(self.genre_classification_panel, 'current_genre'):
             current_genre = self.genre_classification_panel.current_genre
             
-        if self.show_chromagram and not self.frozen_chromagram and self.adaptive_updater.should_update('chromagram'):
-            self.chromagram_panel.update(spectrum_data['spectrum'], audio_windowed, freq_array, current_genre)
+        if ('chromagram' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_chromagram and self.adaptive_updater.should_update('chromagram')):
+            self.chromagram_panel.update(spectrum_data['spectrum'], audio_windowed, freq_array, current_genre, debug_enabled=self.show_debug)
         
         # Extract drum info for genre classification
         drum_info = {}
@@ -953,7 +1073,8 @@ class ProfessionalLiveAudioAnalyzer:
             current_chord = getattr(self.chromagram_panel, 'current_chord', None)
             detected_key = getattr(self.chromagram_panel, 'detected_key', None)
         
-        if self.show_genre_classification and not self.frozen_genre_classification and self.adaptive_updater.should_update('genre_classification'):
+        if ('genre_classification' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_genre_classification and self.adaptive_updater.should_update('genre_classification')):
             self.genre_classification_panel.update(
                 spectrum_data['spectrum'], audio_windowed, freq_array,
                 drum_info, harmonic_info,
@@ -961,33 +1082,45 @@ class ProfessionalLiveAudioAnalyzer:
             )
         
         # Update integrated music panel if active
-        if self.show_integrated_music and not self.frozen_integrated_music and self.adaptive_updater.should_update('integrated_music'):
-            # Get raw audio data for music analysis
-            # Use the original audio data before any processing
-            raw_audio = audio_windowed.copy()
-            
-            # Compute dedicated FFT for music analysis with raw data
-            analysis_fft_size = 4096  # Fixed size for consistency
-            if len(raw_audio) < analysis_fft_size:
-                analysis_audio = np.pad(raw_audio, (0, analysis_fft_size - len(raw_audio)), mode='constant')
+        if ('integrated_music' in self.panel_canvas.get_visible_panels() and 
+            not self.frozen_integrated_music and self.adaptive_updater.should_update('integrated_music')):
+            # Check if we have batched FFT result for music panel
+            if 'music_fft_id' in locals() and music_fft_id and music_fft_id in fft_results:
+                # Use batched FFT result
+                music_result = fft_results[music_fft_id]
+                analysis_magnitude = music_result['magnitude']
+                analysis_frequencies = music_result['frequencies']
+                
+                # Get the audio data used
+                analysis_fft_size = 4096
+                if len(audio_windowed) < analysis_fft_size:
+                    analysis_audio = np.pad(audio_windowed, (0, analysis_fft_size - len(audio_windowed)), mode='constant')
+                else:
+                    analysis_audio = audio_windowed[-analysis_fft_size:]
             else:
-                analysis_audio = raw_audio[-analysis_fft_size:]
+                # Fallback to computing FFT if batch result not available
+                raw_audio = audio_windowed.copy()
+                analysis_fft_size = 4096
+                if len(raw_audio) < analysis_fft_size:
+                    analysis_audio = np.pad(raw_audio, (0, analysis_fft_size - len(raw_audio)), mode='constant')
+                else:
+                    analysis_audio = raw_audio[-analysis_fft_size:]
+                
+                # Apply window and compute FFT on raw audio
+                analysis_window = np.hanning(len(analysis_audio))
+                analysis_windowed = analysis_audio * analysis_window
+                analysis_fft = np.fft.rfft(analysis_windowed)
+                analysis_magnitude = np.abs(analysis_fft)
+                analysis_frequencies = np.fft.rfftfreq(len(analysis_windowed), 1.0 / SAMPLE_RATE)
             
-            # Apply window and compute FFT on raw audio
-            analysis_window = np.hanning(len(analysis_audio))
-            analysis_windowed = analysis_audio * analysis_window
-            analysis_fft = np.fft.rfft(analysis_windowed)
-            analysis_magnitude = np.abs(analysis_fft)
-            analysis_frequencies = np.fft.rfftfreq(len(analysis_windowed), 1.0 / SAMPLE_RATE)
-            
-            # Update panel with clean, unprocessed FFT data
+            # Update panel with FFT data
             self.integrated_music_panel.update(
                 analysis_magnitude, analysis_audio, analysis_frequencies,
                 drum_info, harmonic_info
             )
         
         # Update voice detection panel
-        if self.show_voice_detection and not self.frozen_voice_detection:
+        if 'voice_detection' in self.panel_canvas.get_visible_panels() and not self.frozen_voice_detection:
             self.voice_detection_panel.update(audio_windowed, spectrum_data['spectrum'])
             # Get voice status for other uses
             voice_status = self.voice_detection_panel.get_status()
@@ -995,11 +1128,11 @@ class ProfessionalLiveAudioAnalyzer:
             self.voice_confidence = voice_status['confidence']
         
         # Update phase correlation panel (simulated stereo for now)
-        if self.show_phase and not self.frozen_phase_correlation:
+        if 'phase_correlation' in self.panel_canvas.get_visible_panels() and not self.frozen_phase_correlation:
             self.phase_correlation_panel.update(audio_windowed, spectrum_data['spectrum'])
         
         # Update transient detection panel
-        if self.show_transient and not self.frozen_transient_detection:
+        if 'transient_detection' in self.panel_canvas.get_visible_panels() and not self.frozen_transient_detection:
             self.transient_detection_panel.update(audio_windowed, spectrum_data['spectrum'])
         
         # Phase coherence analysis
@@ -1181,6 +1314,85 @@ class ProfessionalLiveAudioAnalyzer:
         
         self.panel_test_counter += 1
     
+    def print_panel_debug_info(self):
+        """Print debug information for all visible panels"""
+        print("\n[ACTIVE PANELS DEBUG INFO]")
+        print("-" * 40)
+        
+        # Get visible panels from canvas
+        visible_panels = self.panel_canvas.get_visible_panels()
+        
+        # Check each panel and print its debug info
+        if 'professional_meters' in visible_panels:
+            print("\n[Professional Meters]")
+            if hasattr(self.professional_meters_panel, 'current_lufs'):
+                print(f"LUFS: {self.professional_meters_panel.current_lufs:.1f}")
+                print(f"True Peak: {self.professional_meters_panel.true_peak_db:.1f} dB")
+                print(f"K-weighted: {getattr(self.professional_meters_panel, 'k_weighted_db', 0):.1f} dB")
+        
+        if 'transient_detection' in visible_panels:
+            print("\n[Transient Detection]")
+            print(f"Detected: {self.transient_detection_panel.transient_detected}")
+            print(f"Type: {self.transient_detection_panel.transient_type}")
+            print(f"Strength: {self.transient_detection_panel.transient_strength:.2f}")
+            print(f"Attack: {self.transient_detection_panel.attack_time:.1f}ms")
+            print(f"Crest Factor: {self.transient_detection_panel.crest_factor:.1f} dB")
+        
+        if 'voice_detection' in visible_panels:
+            print("\n[Voice Detection]")
+            status = self.voice_detection_panel.get_status()
+            print(f"Voice Active: {status['active']}")
+            print(f"Confidence: {status['confidence']:.1f}%")
+            print(f"Type: {status['voice_type']}")
+            print(f"Pitch: {status.get('pitch', 0):.1f} Hz")
+        
+        if 'phase_correlation' in visible_panels:
+            print("\n[Phase Correlation]")
+            print(f"Correlation: {self.phase_correlation_panel.correlation:.3f}")
+            print(f"Stereo Width: {self.phase_correlation_panel.stereo_width:.2f}")
+            print(f"Balance: {self.phase_correlation_panel.balance:.3f}")
+        
+        if 'pitch_detection' in visible_panels:
+            print("\n[Pitch Detection]")
+            if hasattr(self.pitch_detection_panel, 'current_pitch'):
+                print(f"Pitch: {self.pitch_detection_panel.current_pitch:.1f} Hz")
+                print(f"Note: {getattr(self.pitch_detection_panel, 'current_note', 'N/A')}")
+                print(f"Confidence: {getattr(self.pitch_detection_panel, 'pitch_confidence', 0):.1f}%")
+        
+        if 'genre_classification' in visible_panels:
+            print("\n[Genre Classification]")
+            genre_info = self.genre_classification_panel.genre_info
+            print(f"Genre: {genre_info.get('top_genre', 'Unknown')}")
+            print(f"Confidence: {genre_info.get('confidence', 0):.1f}%")
+            top_3 = genre_info.get('top_3', [])
+            if top_3:
+                print("Top 3: " + ", ".join([f"{g[0]} ({g[1]:.0f}%)" for g in top_3[:3]]))
+        
+        if 'integrated_music' in visible_panels:
+            print("\n[Integrated Music Analysis]")
+            if hasattr(self.integrated_music_panel, 'current_key'):
+                print(f"Key: {self.integrated_music_panel.current_key}")
+                print(f"Tempo: {getattr(self.integrated_music_panel, 'tempo', 0):.1f} BPM")
+                print(f"Genre: {getattr(self.integrated_music_panel, 'current_genre', 'Unknown')}")
+        
+        # VU Meters (not in canvas)
+        if self.show_vu_meters:
+            print("\n[VU Meters]")
+            if hasattr(self.vu_meters_panel, 'left_db'):
+                print(f"Left: {self.vu_meters_panel.left_db:.1f} dB")
+                print(f"Right: {self.vu_meters_panel.right_db:.1f} dB")
+                print(f"Correlation: {getattr(self.vu_meters_panel, 'correlation', 0):.2f}")
+        
+        print("\n" + "-" * 40)
+    
+    def _toggle_panel(self, panel_id, panel_name):
+        """Helper to toggle panel and update window"""
+        is_visible = self.panel_canvas.toggle_panel(panel_id)
+        print(f"{panel_name}: {'ON' if is_visible else 'OFF'}")
+        self.preset_locked = False  # Unlock to allow resize
+        self._update_window_for_canvas()
+        return is_visible
+    
     def handle_keyboard(self, event):
         """Handle keyboard shortcuts"""
         if event.key == pygame.K_ESCAPE:
@@ -1188,52 +1400,144 @@ class ProfessionalLiveAudioAnalyzer:
         elif event.key == pygame.K_SPACE:
             self.toggle_compensation_ab()
         elif event.key == pygame.K_m:
-            self.frozen_meters = not self.frozen_meters
-            print(f"Professional Meters: {'FROZEN' if self.frozen_meters else 'ACTIVE'}")
+            # Toggle professional meters panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+M = freeze/unfreeze
+                self.frozen_meters = not self.frozen_meters
+                print(f"Professional Meters: {'FROZEN' if self.frozen_meters else 'ACTIVE'}")
+            else:
+                # M = toggle visibility
+                self._toggle_panel('professional_meters', 'Professional Meters')
         elif event.key == pygame.K_h:
-            self.frozen_harmonic = not self.frozen_harmonic
-            print(f"Harmonic Analysis: {'FROZEN' if self.frozen_harmonic else 'ACTIVE'}")
+            # Toggle harmonic analysis panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+H = freeze/unfreeze
+                self.frozen_harmonic = not self.frozen_harmonic
+                print(f"Harmonic Analysis: {'FROZEN' if self.frozen_harmonic else 'ACTIVE'}")
+            else:
+                # H = toggle visibility
+                self._toggle_panel('harmonic_analysis', 'Harmonic Analysis')
         elif event.key == pygame.K_z:
-            self.frozen_bass_zoom = not self.frozen_bass_zoom
-            print(f"\n{'='*50}")
-            print(f"Bass Zoom Panel: {'FROZEN' if self.frozen_bass_zoom else 'ACTIVE'}")
-            print(f"{'='*50}\n")
+            # Toggle bass zoom panel
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+Z = freeze/unfreeze
+                self.frozen_bass_zoom = not self.frozen_bass_zoom
+                print(f"\n{'='*50}")
+                print(f"Bass Zoom Panel: {'FROZEN' if self.frozen_bass_zoom else 'ACTIVE'}")
+                print(f"{'='*50}\n")
+            else:
+                # Z = toggle visibility (legacy behavior for non-canvas panel)
+                self.show_bass_zoom = not self.show_bass_zoom
+                print(f"Bass Zoom: {'ON' if self.show_bass_zoom else 'OFF'}")
+                self.preset_locked = False  # Unlock to allow resize
+                self._update_window_for_canvas()
         elif event.key == pygame.K_r:
-            self.frozen_room_analysis = not self.frozen_room_analysis
-            print(f"Room Analysis: {'FROZEN' if self.frozen_room_analysis else 'ACTIVE'}")
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+R = reset peak hold for professional meters
+                if hasattr(self, 'professional_meters'):
+                    self.professional_meters.reset_peak_hold()
+                    print(f"Professional Meters: Peak hold reset")
+            elif pygame.key.get_mods() & pygame.KMOD_CTRL:
+                # Ctrl+R = freeze/unfreeze room analysis
+                self.frozen_room_analysis = not self.frozen_room_analysis
+                print(f"Room Analysis: {'FROZEN' if self.frozen_room_analysis else 'ACTIVE'}")
+            else:
+                # R = toggle room analysis visibility
+                self.show_room_analysis = not self.show_room_analysis
+                print(f"Room Analysis: {'ON' if self.show_room_analysis else 'OFF'}")
+                self.preset_locked = False  # Unlock to allow resize
+                self._update_window_for_canvas()
         elif event.key == pygame.K_p:
-            self.frozen_pitch_detection = not self.frozen_pitch_detection
-            print(f"Pitch Detection: {'FROZEN' if self.frozen_pitch_detection else 'ACTIVE'}")
+            # Toggle pitch detection panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+P = freeze/unfreeze
+                self.frozen_pitch_detection = not self.frozen_pitch_detection
+                print(f"Pitch Detection: {'FROZEN' if self.frozen_pitch_detection else 'ACTIVE'}")
+            else:
+                # P = toggle visibility
+                self._toggle_panel('pitch_detection', 'Pitch Detection')
+        elif event.key == pygame.K_o:
+            # Toggle performance overlay
+            self.performance_profiler.toggle_visibility()
+            print(f"Performance Overlay: {'ON' if self.performance_profiler.visible else 'OFF'}")
         elif event.key == pygame.K_c:
-            # C key disabled - chromagram is part of integrated music panel
-            print("Use 'I' to toggle Integrated Music Analysis panel (includes chromagram)")
+            # Toggle chromagram panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+C = freeze/unfreeze
+                self.frozen_chromagram = not self.frozen_chromagram
+                print(f"Chromagram: {'FROZEN' if self.frozen_chromagram else 'ACTIVE'}")
+            else:
+                # C = toggle visibility
+                self._toggle_panel('chromagram', 'Chromagram')
         elif event.key == pygame.K_g:
-            self.show_grid = not self.show_grid
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+G = toggle gating for professional meters
+                if hasattr(self, 'professional_meters'):
+                    self.professional_meters.toggle_gating()
+                    gating_state = 'GATED' if self.professional_meters.use_gated_measurement else 'UNGATED'
+                    print(f"Professional Meters: {gating_state} measurement")
+            else:
+                self.show_grid = not self.show_grid
         elif event.key == pygame.K_j:
-            # J key disabled - genre classification is part of integrated music panel  
-            print("Use 'I' to toggle Integrated Music Analysis panel (includes genre classification)")
+            # Toggle genre classification panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+J = freeze/unfreeze
+                self.frozen_genre_classification = not self.frozen_genre_classification
+                print(f"Genre Classification: {'FROZEN' if self.frozen_genre_classification else 'ACTIVE'}")
+            else:
+                # J = toggle visibility
+                self._toggle_panel('genre_classification', 'Genre Classification')
         elif event.key == pygame.K_u:
-            self.frozen_vu_meters = not self.frozen_vu_meters
-            print(f"VU Meters: {'FROZEN' if self.frozen_vu_meters else 'ACTIVE'}")
+            # Toggle VU meters visibility/freeze (not in canvas)
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+U = freeze/unfreeze
+                self.frozen_vu_meters = not self.frozen_vu_meters
+                print(f"VU Meters: {'FROZEN' if self.frozen_vu_meters else 'ACTIVE'}")
+            else:
+                # U = toggle visibility
+                self.show_vu_meters = not self.show_vu_meters
+                print(f"VU Meters: {'ON' if self.show_vu_meters else 'OFF'}")
         elif event.key == pygame.K_v:
-            self.show_voice_detection = not self.show_voice_detection
+            # Toggle voice detection panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+V = freeze/unfreeze
+                self.frozen_voice_detection = not self.frozen_voice_detection
+                print(f"Voice Detection: {'FROZEN' if self.frozen_voice_detection else 'ACTIVE'}")
+            else:
+                # V = toggle visibility
+                self._toggle_panel('voice_detection', 'Voice Detection')
         elif event.key == pygame.K_y:
-            self.show_phase = not self.show_phase
-            print(f"Phase Correlation: {'ON' if self.show_phase else 'OFF'}")
+            # Toggle phase correlation panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+Y = freeze/unfreeze
+                self.frozen_phase_correlation = not self.frozen_phase_correlation
+                print(f"Phase Correlation: {'FROZEN' if self.frozen_phase_correlation else 'ACTIVE'}")
+            else:
+                # Y = toggle visibility
+                self._toggle_panel('phase_correlation', 'Phase Correlation')
         elif event.key == pygame.K_x:
-            self.show_transient = not self.show_transient
-            print(f"Transient Detection: {'ON' if self.show_transient else 'OFF'}")
+            # Toggle transient detection panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+X = freeze/unfreeze
+                self.frozen_transient_detection = not self.frozen_transient_detection
+                print(f"Transient Detection: {'FROZEN' if self.frozen_transient_detection else 'ACTIVE'}")
+            else:
+                # X = toggle visibility
+                self._toggle_panel('transient_detection', 'Transient Detection')
         elif event.key == pygame.K_f:
             self.show_formant = not self.show_formant
         elif event.key == pygame.K_a:
             self.show_advanced_voice = not self.show_advanced_voice
         elif event.key == pygame.K_d:
-            # Print debug snapshot on demand
-            if hasattr(self, 'last_spectrum_data'):
+            # Toggle debug mode for continuous output
+            self.show_debug = not self.show_debug
+            print(f"Debug mode: {'ON' if self.show_debug else 'OFF'}")
+            
+            # Also print debug snapshot when enabling
+            if self.show_debug and hasattr(self, 'last_spectrum_data'):
                 self.print_debug_snapshot(self.last_spectrum_data)
+                self.print_panel_debug_info()
                 print("Debug snapshot printed to terminal")
-            else:
-                print("No spectrum data available for debug snapshot")
         elif event.key == pygame.K_k:
             self.adaptive_allocation_enabled = not self.adaptive_allocation_enabled
             print(f"Adaptive frequency allocation: {'ON' if self.adaptive_allocation_enabled else 'OFF'}")
@@ -1241,17 +1545,47 @@ class ProfessionalLiveAudioAnalyzer:
             self.freq_compensation_enabled = not self.freq_compensation_enabled
             print(f"Frequency compensation: {'ON' if self.freq_compensation_enabled else 'OFF'}")
         elif event.key == pygame.K_w:
-            self.psychoacoustic_enabled = not self.psychoacoustic_enabled
-            print(f"Psychoacoustic processing: {'ON' if self.psychoacoustic_enabled else 'OFF'}")
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+W = cycle weighting mode for professional meters
+                if hasattr(self, 'professional_meters'):
+                    current_mode = self.professional_meters.metering.weighting_mode
+                    modes = ['K', 'A', 'C', 'Z']
+                    current_idx = modes.index(current_mode)
+                    new_mode = modes[(current_idx + 1) % len(modes)]
+                    self.professional_meters.set_weighting(new_mode)
+                    print(f"Professional Meters weighting: {new_mode}-weighted")
+            else:
+                self.psychoacoustic_enabled = not self.psychoacoustic_enabled
+                print(f"Psychoacoustic processing: {'ON' if self.psychoacoustic_enabled else 'OFF'}")
         elif event.key == pygame.K_e:
             self.normalization_enabled = not self.normalization_enabled
             print(f"Normalization: {'ON' if self.normalization_enabled else 'OFF'}")
         elif event.key == pygame.K_t:
-            self.test_mode = not self.test_mode
-            print(f"Test mode: {'ON' if self.test_mode else 'OFF'}")
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+T = cycle peak hold time for professional meters
+                if hasattr(self, 'professional_meters'):
+                    hold_times = [0.5, 1.0, 2.0, 5.0, 10.0]  # seconds
+                    current_time = self.professional_meters.peak_hold_time
+                    # Find closest time in list
+                    closest_idx = min(range(len(hold_times)), key=lambda i: abs(hold_times[i] - current_time))
+                    new_idx = (closest_idx + 1) % len(hold_times)
+                    new_time = hold_times[new_idx]
+                    self.professional_meters.set_peak_hold_time(new_time)
+                    print(f"Professional Meters: Peak hold time = {new_time}s")
+            else:
+                # Test mode disabled - uses obsolete freeze/pause functionality
+                # self.test_mode = not self.test_mode
+                # print(f"Test mode: {'ON' if self.test_mode else 'OFF'}")
+                print("Test mode (T) has been disabled - use individual panel toggles instead")
         elif event.key == pygame.K_i:
-            # 'I' key disabled - Integrated Music Analysis panel is always visible
-            print("Integrated Music Analysis panel is always visible (no toggle needed)")
+            # Toggle integrated music panel in canvas
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+I = freeze/unfreeze
+                self.frozen_integrated_music = not self.frozen_integrated_music
+                print(f"Integrated Music: {'FROZEN' if self.frozen_integrated_music else 'ACTIVE'}")
+            else:
+                # I = toggle visibility
+                self._toggle_panel('integrated_music', 'Integrated Music Analysis')
         elif event.key == pygame.K_s:
             self.save_screenshot()
         elif event.key == pygame.K_F11:
@@ -1670,7 +2004,7 @@ class ProfessionalLiveAudioAnalyzer:
                 ("VU Meters (U)", self.show_vu_meters),
                 # ("Genre Classification (J)", self.show_genre_classification),  # Part of integrated panel
                 ("Integrated Music", self.show_integrated_music),  # Always on, no toggle
-                ("Test Mode (T)", self.test_mode),
+                # ("Test Mode (T)", self.test_mode),  # Disabled - obsolete functionality
                 ("A/B Mode", self.compensation_ab_mode),
             ]
         ]
@@ -1911,6 +2245,8 @@ class ProfessionalLiveAudioAnalyzer:
         print("Starting visualization...")
         
         while self.running:
+            # Start frame timing
+            self.performance_profiler.profiler.start_frame()
             frame_start = time.time()
             
             # Handle events
@@ -1924,16 +2260,18 @@ class ProfessionalLiveAudioAnalyzer:
                     # User manually resized, so unlock any preset
                     self.preset_locked = False
             
-            # Process audio
+            # Process audio with timing
+            panel_start = self.performance_profiler.profiler.start_panel('audio_processing')
             process_start = time.time()
             spectrum_data = self.process_audio_spectrum()
             process_time = (time.time() - process_start) * 1000
             self.process_times.append(process_time)
+            self.performance_profiler.profiler.end_panel('audio_processing', panel_start)
             
             if spectrum_data:
-                # Auto-test panels if enabled
-                if self.test_mode:
-                    self.test_all_panels()
+                # Auto-test panels if enabled (disabled - uses obsolete freeze functionality)
+                # if self.test_mode:
+                #     self.test_all_panels()
                 
                 # Clear screen
                 self.screen.fill(BACKGROUND_COLOR)
@@ -1951,7 +2289,8 @@ class ProfessionalLiveAudioAnalyzer:
                 vis_start_y = header_height + top_margin  # Use returned header height
                 
                 # Calculate vis_width - leave room for VU meter if enabled
-                vu_meter_space = 170 if self.show_vu_meters else 0  # 150px width + 20px margins
+                # Always reserve space for VU meters on the right
+                vu_meter_space = 170  # 150px width + 20px margins
                 vis_width = self.width - (2 * side_margin) - vu_meter_space
                 
                 # Use fixed spectrum height instead of remaining space
@@ -2015,12 +2354,21 @@ class ProfessionalLiveAudioAnalyzer:
                 panel_height = 250  # Adjusted to fit better with footer gap
                 max_columns = 4  # Limit to 4 panels per row
                 
-                # VU meters on right side of spectrum with full spectrum height
+                # Calculate canvas position early for VU meter height calculation
+                bass_zoom_y = header_height + 10 + 800 + 10 + 30  # 30px below frequency scale
+                if self.show_bass_zoom:
+                    canvas_y = bass_zoom_y + panel_height + panel_padding
+                else:
+                    # Position directly below spectrum with frequency scale spacing
+                    canvas_y = vis_params['spectrum_bottom'] + 40  # 40px for scale + spacing
+                
+                # VU meters on right side of spectrum (always drawn, outside canvas system)
                 if self.show_vu_meters:
                     vu_meter_x = vis_params['spectrum_right'] + 10  # 10px gap from spectrum
                     vu_meter_y = vis_params['spectrum_top']
                     vu_meter_width = 150  # Narrower width
-                    vu_meter_height = vis_params['vis_height']  # Match spectrum height
+                    # Extend from top of visualizer to top of canvas
+                    vu_meter_height = canvas_y - vu_meter_y - 10  # Leave 10px gap before canvas
                     
                     self.vu_meters_panel.draw(self.screen, vu_meter_x, vu_meter_y, 
                                             vu_meter_width, vu_meter_height)
@@ -2038,8 +2386,8 @@ class ProfessionalLiveAudioAnalyzer:
                         text_rect = rotated_text.get_rect(center=(vu_meter_x + vu_meter_width // 2, vu_meter_y + vu_meter_height // 2))
                         self.screen.blit(rotated_text, text_rect)
                 
-                # Bass zoom panel directly below spectrum (full width)
-                bass_zoom_y = header_height + 10 + 800 + 10  # 10px below spectrum
+                # Bass zoom panel below spectrum and frequency scale (full width)
+                # bass_zoom_y already calculated above for canvas position
                 if self.show_bass_zoom:
                     bass_zoom_x = vis_start_x
                     bass_zoom_width = vis_width
@@ -2056,8 +2404,19 @@ class ProfessionalLiveAudioAnalyzer:
                         text_rect = frozen_text.get_rect(center=(bass_zoom_x + bass_zoom_width // 2, bass_zoom_y + panel_height // 2))
                         self.screen.blit(frozen_text, text_rect)
                 
-                # Technical panels grid below bass zoom
-                tech_panels_start_y = bass_zoom_y + (panel_height + panel_padding if self.show_bass_zoom else 0)
+                # Update canvas position (already calculated above)
+                self.panel_canvas.y = canvas_y
+                self.panel_canvas.x = vis_start_x - 2  # Align with spectrum border
+                self.panel_canvas.max_width = vis_width + 4  # Account for border
+                
+                # Update canvas animation
+                self.panel_canvas.update(1/TARGET_FPS)
+                
+                # Draw the canvas with all its panels
+                self.panel_canvas.draw(self.screen)
+                
+                # Legacy technical panels (room analysis only, others now in canvas)
+                tech_panels_start_y = canvas_y + self.panel_canvas.get_total_height() + panel_padding
                 
                 # Debug: Print panel positions
                 if not hasattr(self, '_positions_logged'):
@@ -2069,28 +2428,10 @@ class ProfessionalLiveAudioAnalyzer:
                     print(f"Footer starts at: {self.height - 80}")
                     self._positions_logged = True
                 
-                # Collect all active technical panels
+                # Only handle room analysis panel now (others are in canvas)
                 active_panels = []
-                if self.show_meters:
-                    active_panels.append(('meters', self.professional_meters_panel))
-                if self.show_harmonic:
-                    active_panels.append(('harmonic', self.harmonic_analysis_panel))
-                if self.show_pitch_detection:
-                    active_panels.append(('pitch', self.pitch_detection_panel))
-                if self.show_chromagram and not self.show_integrated_music:  # Don't show if integrated is on
-                    active_panels.append(('chromagram', self.chromagram_panel))
-                if self.show_genre_classification and not self.show_integrated_music:  # Don't show if integrated is on
-                    active_panels.append(('genre', self.genre_classification_panel))
                 if self.show_room_analysis:
                     active_panels.append(('room', None))  # Special case - drawn manually
-                if self.show_integrated_music:
-                    active_panels.append(('integrated', self.integrated_music_panel))
-                if self.show_voice_detection:
-                    active_panels.append(('voice', self.voice_detection_panel))
-                if self.show_phase:
-                    active_panels.append(('phase', self.phase_correlation_panel))
-                if self.show_transient:
-                    active_panels.append(('transient', self.transient_detection_panel))
                 
                 # Calculate grid positions
                 if active_panels:
@@ -2123,27 +2464,9 @@ class ProfessionalLiveAudioAnalyzer:
                         panel_x = grid_start_x + col * (panel_width + panel_padding)
                         panel_y = tech_panels_start_y + row * (panel_height + panel_padding)
                         
-                        # Calculate UI scale based on panel type and window size
-                        ui_scale = self.width / 2000.0  # Scale based on window width
-                        
-                        # Special handling for integrated panel
+                        # Only room panel is drawn here now
                         actual_panel_height = panel_height
                         actual_panel_width = panel_width
-                        if panel_type == 'integrated':
-                            # Make integrated panel 2 columns wide
-                            # Place it in column 2-3 (under Pitch Detection and Room Analysis)
-                            col = 2
-                            panel_x = grid_start_x + col * (panel_width + panel_padding)
-                            actual_panel_width = (panel_width * 2) + panel_padding  # Span 2 columns
-                            # Increase height for integrated panel to fit all content including hip-hop features
-                            # Base height + genre/harmony sections + hip-hop + cross-analysis + chromagram + confidence graph
-                            actual_panel_height = panel_height + 120  # 380px total to fit all content
-                        elif panel_type == 'voice':
-                            actual_panel_height = 180  # Voice detection panel fixed height
-                        elif panel_type == 'phase':
-                            actual_panel_height = 200  # Phase correlation panel fixed height
-                        elif panel_type == 'transient':
-                            actual_panel_height = 160  # Transient detection panel fixed height
                         
                         # Handle room panel specially
                         if panel_type == 'room':
@@ -2176,36 +2499,11 @@ class ProfessionalLiveAudioAnalyzer:
                                 mode_text = self.font_tiny.render(mode_info, True, (200, 200, 100))
                                 self.screen.blit(mode_text, (panel_x + 20, y_pos))
                                 y_pos += 25
-                        else:
-                            # Regular panel
-                            # Check if panel accepts ui_scale parameter
-                            if panel_type in ['voice', 'phase', 'transient']:
-                                # New panels don't have ui_scale parameter yet
-                                panel.draw(self.screen, panel_x, panel_y, actual_panel_width)
-                            else:
-                                panel.draw(self.screen, panel_x, panel_y, actual_panel_width, actual_panel_height, ui_scale)
+                        # Room panel is always drawn manually, no else needed
                         
-                        # Draw frozen indicator if panel is frozen
+                        # Draw frozen indicator if room panel is frozen
                         frozen_state = False
-                        if panel_type == 'meters' and self.frozen_meters:
-                            frozen_state = True
-                        elif panel_type == 'harmonic' and self.frozen_harmonic:
-                            frozen_state = True
-                        elif panel_type == 'pitch' and self.frozen_pitch_detection:
-                            frozen_state = True
-                        elif panel_type == 'chromagram' and self.frozen_chromagram:
-                            frozen_state = True
-                        elif panel_type == 'genre' and self.frozen_genre_classification:
-                            frozen_state = True
-                        elif panel_type == 'integrated' and self.frozen_integrated_music:
-                            frozen_state = True
-                        elif panel_type == 'room' and self.frozen_room_analysis:
-                            frozen_state = True
-                        elif panel_type == 'voice' and self.frozen_voice_detection:
-                            frozen_state = True
-                        elif panel_type == 'phase' and self.frozen_phase_correlation:
-                            frozen_state = True
-                        elif panel_type == 'transient' and self.frozen_transient_detection:
+                        if panel_type == 'room' and self.frozen_room_analysis:
                             frozen_state = True
                         
                         if frozen_state:
@@ -2239,24 +2537,7 @@ class ProfessionalLiveAudioAnalyzer:
                             warning_text = self.font_tiny.render("! Panels too close to footer", True, (255, 100, 100))
                             self.screen.blit(warning_text, (10, footer_y - 15))
                 
-                # Draw voice detection info
-                if self.show_voice_detection and self.voice_active:
-                    # Create a semi-transparent background for the voice detection
-                    voice_bg = pygame.Surface((280, 40))
-                    voice_bg.set_alpha(200)
-                    voice_bg.fill((20, 30, 25))
-                    
-                    # Position in upper right, below header
-                    voice_x = self.width - 290
-                    voice_y = 130  # Below header
-                    
-                    self.screen.blit(voice_bg, (voice_x - 10, voice_y - 5))
-                    
-                    voice_text = self.font_medium.render(
-                        f"Voice Detected ({self.voice_confidence:.0f}%)",
-                        True, (100, 255, 100)
-                    )
-                    self.screen.blit(voice_text, (voice_x, voice_y))
+                # Voice detection is now handled in the canvas panel
                 
                 # Draw debug info
                 self.draw_debug_info(spectrum_data)
@@ -2268,6 +2549,14 @@ class ProfessionalLiveAudioAnalyzer:
                 
                 # Draw footer with help and copyright info
                 self.draw_footer()
+            
+            # Draw performance overlay if enabled
+            if self.performance_profiler.visible:
+                overlay_width = 400
+                overlay_height = 600
+                overlay_x = self.width - overlay_width - 10
+                overlay_y = 10
+                self.performance_profiler.draw(self.screen, overlay_x, overlay_y, overlay_width, overlay_height)
             
             # Update display
             pygame.display.flip()
@@ -2332,16 +2621,18 @@ def main():
     print("  🎯 Adaptive Frequency Allocation: Dynamic bass detail (60-80% based on content)")
     print("  🎨 Professional UI: Studio-grade visualization with multiple panels")
     print("Professional Controls:")
-    print("  M: Freeze/Unfreeze Professional meters | U: Freeze/Unfreeze VU meters")
-    print("  H: Freeze/Unfreeze Harmonic analysis | R: Freeze/Unfreeze Room analysis")
-    print("  Z: Freeze/Unfreeze Bass zoom | P: Freeze/Unfreeze Pitch detection")
-    print("  C: Freeze/Unfreeze Chromagram | J: Freeze/Unfreeze Genre classification")
-    print("  I: Toggle Integrated Music Analysis (combines Chromagram + Genre)")
-    print("  G: Toggle grid | S: Screenshot | V/F/A: Voice/Formant/Advanced")
-    print("  K: Toggle adaptive frequency allocation | D: Debug snapshot (terminal)")
-    print("  T: Test mode (auto-freeze panels) | SPACE: Toggle A/B mode | ↑/↓: Adjust gain")
-    print("  1-9: Window size presets (1:Minimum, 2-4:With Bass, 5-7:With Panels, 8-9:Full)")
-    print("  F11: Fullscreen | ESC: Exit")
+    print("  Panel Toggle Keys (press to show/hide, Shift+key to freeze/unfreeze):")
+    print("    M: Professional meters | U: VU meters | H: Harmonic analysis")
+    print("    P: Pitch detection | C: Chromagram | J: Genre classification")
+    print("    I: Integrated Music Analysis | V: Voice detection")
+    print("    Y: Phase correlation | X: Transient detection")
+    print("    Z: Bass zoom (legacy) | R: Room analysis (legacy)")
+    print("  ")
+    print("  Other Controls:")
+    print("    G: Toggle grid | S: Screenshot | D: Debug snapshot")
+    print("    K: Adaptive frequency allocation | T: Test mode")
+    print("    SPACE: Toggle A/B mode | ↑/↓: Adjust gain")
+    print("    1-9: Window size presets | F11: Fullscreen | ESC: Exit")
     print("=" * 90)
 
     analyzer = ProfessionalLiveAudioAnalyzer(

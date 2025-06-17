@@ -171,56 +171,74 @@ class PhaseCorrelationPanel:
                         left_mag, right_mag
                     )
     
-    def draw(self, screen, x, y, width, panel_color=None):
+    def draw(self, screen, x, y, width, height=None, panel_color=None):
         """Draw the phase correlation panel"""
         if not self.fonts:
             return
+        
+        # Use provided height or default
+        if height is None:
+            height = self.panel_height
         
         # Panel background
         if panel_color is None:
             panel_color = self.bg_color
         
-        panel_rect = pygame.Rect(x, y, width, self.panel_height)
+        panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(screen, panel_color, panel_rect)
         pygame.draw.rect(screen, (100, 100, 100), panel_rect, 1)
         
-        # Title
+        # Title with more padding
         title = "Phase Correlation"
         if self.is_frozen:
             title += " [FROZEN]"
         title_surface = self.fonts['small'].render(title, True, (255, 255, 255))
-        screen.blit(title_surface, (x + 10, y + 5))
+        screen.blit(title_surface, (x + 15, y + 10))
         
-        # Layout
-        meter_width = 120
-        gonio_size = min(150, self.panel_height - 50)
+        # Layout with increased padding
+        padding = 20  # Increased padding
+        meter_width = 140  # Slightly wider meters
+        meter_height = 25  # Taller meters
+        meter_spacing = 15  # Space between meters
+        
+        # Calculate positions with better spacing
+        current_y = y + 40  # Start below title
         
         # Correlation meter
-        self._draw_correlation_meter(screen, x + 10, y + 30, meter_width, 20)
+        self._draw_correlation_meter(screen, x + padding, current_y, meter_width, meter_height)
+        current_y += meter_height + meter_spacing
         
         # Stereo width indicator
-        self._draw_width_indicator(screen, x + 10, y + 60, meter_width, 20)
+        self._draw_width_indicator(screen, x + padding, current_y, meter_width, meter_height)
+        current_y += meter_height + meter_spacing
         
         # Balance meter
-        self._draw_balance_meter(screen, x + 10, y + 90, meter_width, 20)
+        self._draw_balance_meter(screen, x + padding, current_y, meter_width, meter_height)
+        current_y += meter_height + meter_spacing * 2  # Extra space before graphs
         
-        # Goniometer
-        gonio_x = x + width - gonio_size - 20
-        gonio_y = y + 30
+        # Goniometer - scale based on available height
+        gonio_size = min(int(height * 0.35), width // 3)
+        gonio_x = x + width - gonio_size - padding
+        gonio_y = y + 40
         self._draw_goniometer(screen, gonio_x, gonio_y, gonio_size)
         
         # Frequency-dependent correlation
-        graph_x = x + meter_width + 30
-        graph_y = y + 30
-        graph_width = gonio_x - graph_x - 20
-        graph_height = 80
+        graph_x = x + meter_width + padding * 2
+        graph_y = y + 40
+        graph_width = gonio_x - graph_x - padding
+        graph_height = min(120, int(height * 0.3))
         self._draw_band_correlations(screen, graph_x, graph_y, graph_width, graph_height)
         
-        # History graph
-        history_y = y + 120
-        history_height = 60
-        self._draw_correlation_history(screen, x + 10, history_y, 
-                                      width - 20, history_height)
+        # Add extra padding below goniometer
+        history_y = max(current_y, gonio_y + gonio_size + padding * 2)  # Double padding
+        
+        # History graph - use remaining space but leave padding at bottom
+        available_height = (y + height) - history_y - padding * 2  # Double padding at bottom
+        history_height = max(80, available_height)  # Use all available space
+        
+        if history_height > 40:  # Only draw if there's enough space
+            self._draw_correlation_history(screen, x + padding, history_y, 
+                                          width - 2 * padding, history_height)
     
     def _draw_correlation_meter(self, screen, x, y, width, height):
         """Draw correlation meter"""
