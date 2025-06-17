@@ -25,6 +25,7 @@ class ChromagramAnalyzer:
         
         # Transposition offset for drop-tuned guitars (0 = standard, -2 = whole step down)
         self.transposition_offset = 0  # Will be set based on detected tuning
+        self.tuning_history = []  # For stable tuning detection
         
         # Krumhansl-Kessler key profiles for major and minor keys
         self.major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 
@@ -106,58 +107,134 @@ class ChromagramAnalyzer:
         self.chord_transition_matrix = {}  # Chord transition probabilities
         
     def compute_chromagram(self, fft_data: np.ndarray, freqs: np.ndarray) -> np.ndarray:
-        """Extract 12-bin chromagram from FFT data"""
+        """Enhanced chromagram with harmonic suppression and better pitch mapping"""
+        # Auto-detect tuning if in metal/rock genre
+        if self.current_genre.lower() in ['metal', 'rock']:
+            self.transposition_offset = self.detect_tuning_offset(fft_data, freqs)
+        
         chroma = np.zeros(12)
         A4 = 440.0
-        C0 = A4 * np.power(2, -4.75)  # C0 = 16.35 Hz
         
-        # Process lower frequencies for metal/blues detection (drop tunings)
+        # Apply harmonic suppression to reduce octave errors
+        enhanced_fft = self._suppress_harmonics(fft_data.copy(), freqs)
+        
+        # Enhanced frequency-to-chroma mapping
         for i, freq in enumerate(freqs):
-            if freq > 30 and freq < 8000:  # Include very low frequencies for drop tunings (down to B0 ~31Hz)
-                # Map frequency to pitch class with sub-semitone precision
+            if freq > 20 and freq < 8000:  # Extended low range for drop tunings
                 if freq > 0:
-                    # Calculate pitch relative to C0
-                    pitch = 12 * np.log2(freq / C0)
+                    # Calculate MIDI note number
+                    midi_note = 69 + 12 * np.log2(freq / A4)
                     
-                    # Get fractional chroma bin
-                    chroma_bin_float = pitch % 12
+                    # Apply tuning offset
+                    midi_note += self.transposition_offset
                     
-                    # Distribute energy to adjacent bins for sub-semitone accuracy
-                    lower_bin = int(np.floor(chroma_bin_float)) % 12
-                    upper_bin = int(np.ceil(chroma_bin_float)) % 12
-                    fraction = chroma_bin_float - lower_bin
+                    # Get chroma bin with sub-semitone precision
+                    chroma_bin_float = midi_note % 12
                     
-                    # Weight by magnitude - use power instead of amplitude for better low frequency response
-                    magnitude = fft_data[i] ** 2  # Square for power
-                    chroma[lower_bin] += magnitude * (1 - fraction)
-                    if upper_bin != lower_bin:
-                        chroma[upper_bin] += magnitude * fraction
+                    # Use gaussian window for better bin assignment
+                    for offset in range(-2, 3):  # Check neighboring bins
+                        target_bin = (int(chroma_bin_float) + offset) % 12
+                        distance = abs(chroma_bin_float - (int(chroma_bin_float) + offset))
+                        
+                        # Gaussian weight
+                        weight = np.exp(-0.5 * (distance / 0.5) ** 2)
+                        
+                        # Apply spectral weighting based on frequency
+                        spectral_weight = self._get_spectral_weight(freq)
+                        
+                        # Add weighted contribution
+                        chroma[target_bin] += enhanced_fft[i] * weight * spectral_weight
         
-        # Normalize to sum to 1
-        chroma_sum = np.sum(chroma)
-        if chroma_sum > 0:
-            chroma = chroma / chroma_sum
-            
-        # Add to history for smoothing
-        self.chroma_history.append(chroma.copy())  # Use copy to avoid reference issues
+        # Post-processing
+        chroma = self._apply_spectral_smoothing(chroma)
         
-        # Return smoothed chromagram (very minimal smoothing for metal to catch fast changes)
-        if len(self.chroma_history) > 2:
-            # For metal/rock, use much less smoothing to catch rapid power chord changes
-            if self.current_genre.lower() in ['metal', 'rock']:
-                # Only use last 3 frames with heavy weight on current
-                recent_frames = min(3, len(self.chroma_history))
-                weights = np.array([0.1, 0.2, 0.7])[-recent_frames:]  # 70% weight on current frame
-                weights = weights / np.sum(weights)
-                smoothed = np.average(list(self.chroma_history)[-recent_frames:], axis=0, weights=weights)
-            else:
-                # Use standard smoothing for other genres
-                weights = np.exp(np.linspace(-2, 0, len(self.chroma_history)))
-                weights = weights / np.sum(weights)
-                smoothed = np.average(self.chroma_history, axis=0, weights=weights)
-            return smoothed
+        # Normalize
+        if np.sum(chroma) > 0:
+            chroma = chroma / np.sum(chroma)
+        
+        # Add to history
+        self.chroma_history.append(chroma.copy())
+        
+        # Return with appropriate smoothing
+        return self._get_smoothed_chromagram()
+    
+    def _suppress_harmonics(self, fft_data: np.ndarray, freqs: np.ndarray) -> np.ndarray:
+        """Suppress harmonics to improve fundamental detection"""
+        enhanced = fft_data.copy()
+        
+        # Find peaks
+        peak_indices = []
+        for i in range(1, len(fft_data) - 1):
+            if fft_data[i] > fft_data[i-1] and fft_data[i] > fft_data[i+1]:
+                if fft_data[i] > np.max(fft_data) * 0.1:
+                    peak_indices.append(i)
+        
+        # For each peak, suppress its harmonics
+        for peak_idx in peak_indices:
+            if peak_idx < len(freqs):
+                fundamental = freqs[peak_idx]
+                
+                # Check harmonics (2f, 3f, 4f, etc.)
+                for harmonic in range(2, 6):
+                    harmonic_freq = fundamental * harmonic
+                    
+                    # Find closest frequency bin
+                    if len(freqs) > 0:
+                        closest_idx = np.argmin(np.abs(freqs - harmonic_freq))
+                        
+                        if closest_idx < len(enhanced) and abs(freqs[closest_idx] - harmonic_freq) < 10:
+                            # Suppress by the harmonic number
+                            enhanced[closest_idx] *= (1.0 / harmonic)
+        
+        return enhanced
+    
+    def _get_spectral_weight(self, freq: float) -> float:
+        """Get frequency-dependent weight for better bass/treble balance"""
+        # A-weighting curve approximation
+        if freq < 100:
+            return 0.5  # Reduce bass dominance
+        elif freq < 1000:
+            return 1.0
+        elif freq < 4000:
+            return 0.8
         else:
-            return chroma
+            return 0.6
+    
+    def _apply_spectral_smoothing(self, chroma: np.ndarray) -> np.ndarray:
+        """Apply smoothing to reduce noise"""
+        # Simple 3-point smoothing with wrap-around
+        smoothed = np.zeros(12)
+        for i in range(12):
+            smoothed[i] = (
+                0.25 * chroma[(i-1) % 12] +
+                0.5 * chroma[i] +
+                0.25 * chroma[(i+1) % 12]
+            )
+        return smoothed
+    
+    def _get_smoothed_chromagram(self) -> np.ndarray:
+        """Get smoothed chromagram based on genre"""
+        if len(self.chroma_history) == 0:
+            return np.zeros(12)
+        
+        current = self.chroma_history[-1]
+        
+        if len(self.chroma_history) == 1:
+            return current
+        
+        # Genre-specific smoothing
+        if self.current_genre.lower() in ['metal', 'rock']:
+            # Less smoothing for metal to capture rapid changes
+            smoothing_factor = 0.7
+        elif self.current_genre.lower() == 'jazz':
+            # Moderate smoothing for jazz
+            smoothing_factor = 0.5
+        else:
+            # More smoothing for pop/classical
+            smoothing_factor = 0.3
+        
+        prev = self.chroma_history[-2]
+        return prev * (1 - smoothing_factor) + current * smoothing_factor
     
     def detect_key(self, chroma: np.ndarray) -> Tuple[str, float]:
         """Detect musical key using correlation with Krumhansl-Kessler profiles
@@ -382,6 +459,81 @@ class ChromagramAnalyzer:
                     return "D5"
         
         return None
+    
+    def detect_tuning_offset(self, fft_data: np.ndarray, freqs: np.ndarray) -> int:
+        """Automatically detect if the audio is in drop tuning
+        
+        Returns:
+            0 for standard tuning
+            -1 for half-step down
+            -2 for whole-step down
+            -3 for 1.5 steps down
+            -4 for two steps down (Drop C)
+        """
+        # Reference frequencies for E2 (lowest guitar string)
+        E2_standard = 82.41  # Hz
+        tuning_refs = {
+            0: E2_standard,           # Standard
+            -1: E2_standard * 0.944,  # Eb (half-step down)
+            -2: E2_standard * 0.891,  # D (whole-step down)
+            -3: E2_standard * 0.841,  # Db
+            -4: E2_standard * 0.794,  # C (two steps down)
+        }
+        
+        # Find strong peaks in the bass frequency range
+        bass_range_mask = (freqs > 70) & (freqs < 100)
+        bass_fft = fft_data[bass_range_mask]
+        bass_freqs = freqs[bass_range_mask]
+        
+        if len(bass_fft) == 0:
+            return self.transposition_offset  # Keep current offset
+        
+        # Find peaks
+        peak_indices = self._find_peaks(bass_fft, prominence=0.3)
+        if len(peak_indices) == 0:
+            return self.transposition_offset
+        
+        # Check each peak against reference tunings
+        peak_freq = bass_freqs[peak_indices[0]]  # Strongest peak
+        
+        best_offset = 0
+        min_cents_diff = float('inf')
+        
+        for offset, ref_freq in tuning_refs.items():
+            # Calculate cents difference
+            if peak_freq > 0 and ref_freq > 0:
+                cents_diff = abs(1200 * np.log2(peak_freq / ref_freq))
+                if cents_diff < min_cents_diff and cents_diff < 50:  # Within 50 cents
+                    min_cents_diff = cents_diff
+                    best_offset = offset
+        
+        # Update offset gradually to avoid jumps
+        self.tuning_history.append(best_offset)
+        if len(self.tuning_history) > 30:
+            self.tuning_history.pop(0)
+        
+        # Use mode of recent detections
+        if len(self.tuning_history) >= 5:
+            from collections import Counter
+            offset_counts = Counter(self.tuning_history)
+            return offset_counts.most_common(1)[0][0]
+        else:
+            return best_offset
+    
+    def _find_peaks(self, data: np.ndarray, prominence: float = 0.3) -> np.ndarray:
+        """Simple peak detection"""
+        peaks = []
+        if len(data) < 3:
+            return np.array(peaks)
+            
+        max_val = np.max(data) if len(data) > 0 else 0
+        threshold = max_val * prominence
+        
+        for i in range(1, len(data) - 1):
+            if data[i] > data[i-1] and data[i] > data[i+1]:
+                if data[i] > threshold:
+                    peaks.append(i)
+        return np.array(peaks)
     
     def detect_chord(self, chroma: np.ndarray, debug_enabled: bool = False) -> Tuple[str, float]:
         """Detect current chord from chromagram
@@ -807,86 +959,21 @@ class ChromagramPanel:
             # Detect current chord
             chord, chord_conf = self.analyzer.detect_chord(chromagram, debug_enabled=debug_enabled)
             
-            # For metal genre, auto-detect and compensate for drop tuning
-            # Metallica often uses whole-step-down tuning
-            if self.analyzer.current_genre == 'metal' and current_genre == 'metal':
-                # Check if this looks like drop-tuned power chords
-                # Debug: Check if we're seeing D (which would be E in standard tuning)
-                has_d = 'D' in [self.analyzer.note_names[i] for i, v in enumerate(chromagram) if v > 0.15]
-                if debug_enabled and has_d:
-                    print(f"[Metal Riff] Detected D in chromagram - likely E5 in drop tuning")
-                
-                # For Metallica-style riffs, implement intelligent pattern detection
-                # The actual notes being played are C# and D (which are D# and E when transposed)
-                # But the chromagram is interpreting C#+G# as F#5 instead of C#5
-                
+            # Handle transposition for display if tuning offset is detected
+            display_chord = chord
+            if self.analyzer.transposition_offset != 0:
                 if debug_enabled:
-                    # Show what notes are actually dominant
-                    top_notes = sorted([(self.analyzer.note_names[i], v) for i, v in enumerate(chromagram) if v > 0.1], 
-                                     key=lambda x: x[1], reverse=True)[:3]
-                    if len(top_notes) > 0:
-                        print(f"[Top Notes] {', '.join([f'{n}:{v:.2f}' for n, v in top_notes])}")
+                    tuning_names = {0: "Standard", -1: "Half-step down", -2: "Whole-step down", 
+                                  -3: "1.5 steps down", -4: "Drop C"}
+                    print(f"[Tuning] Detected: {tuning_names.get(self.analyzer.transposition_offset, 'Unknown')} ({self.analyzer.transposition_offset} semitones)")
                 
-                # Override chord detection for metal riffs with C# and D
-                # When we see strong C#, D, and F# together, it's likely the D#-E-D#-E pattern
-                c_sharp_val = chromagram[1]  # C# index
-                d_val = chromagram[2]  # D index
-                f_sharp_val = chromagram[6]  # F# index
-                
-                # First, fix F#5 misdetection
-                if chord == 'F#5' and c_sharp_val > 0.3:
-                    # F#5 is being detected but C# is strong - likely should be C#5
-                    chord = 'C#5'
-                    chord_conf = max(chord_conf, 0.85)
-                    if debug_enabled:
-                        print(f"[F# Override] F#5 -> C#5 (C# is root, not F#)")
-                
-                # Then check for alternation pattern
-                if c_sharp_val > 0.2 and d_val > 0.1:
-                    # This is likely the Metallica riff pattern
-                    # Force alternation between C#5 and D5
-                    last_chord = self.analyzer.chord_history[-1] if self.analyzer.chord_history else None
-                    
-                    # Count recent occurrences
-                    recent_history = list(self.analyzer.chord_history)[-8:] if len(self.analyzer.chord_history) > 8 else list(self.analyzer.chord_history)
-                    c_sharp_count = sum(1 for c in recent_history if c in ['C#5', 'D#5'])
-                    d_count = sum(1 for c in recent_history if c in ['D5', 'E5'])
-                    
-                    # Force balance between C#5 and D5
-                    if d_val > 0.15 and (d_count < c_sharp_count or (last_chord in ['C#5', 'D#5'] and d_val > c_sharp_val * 0.6)):
-                        # Switch to D5
-                        chord = 'D5'
-                        chord_conf = 0.85
-                        if debug_enabled:
-                            print(f"[Force D5] D:{d_val:.3f}, recent D:{d_count} vs C#:{c_sharp_count}")
-                    elif last_chord in ['D5', 'E5'] and c_sharp_val > d_val * 0.8:
-                        # Switch back to C#5
-                        chord = 'C#5'
-                        chord_conf = 0.85
-                        if debug_enabled:
-                            print(f"[Force C#5] C#:{c_sharp_val:.3f}, after {last_chord}")
-                
-                drop_tuning_map = {
-                    'C5': 'D5',    # C tuned up = D
-                    'C#5': 'D#5',  # C# tuned up = D# (Eb)
-                    'D5': 'E5',    # D tuned up = E  
-                    'D#5': 'F5',   # D# tuned up = F (E#)
-                    'E5': 'F#5',   # E tuned up = F#
-                    'F5': 'G5',    # F tuned up = G
-                    'F#5': 'G#5',  # F# tuned up = G#
-                    'G5': 'A5',    # G tuned up = A
-                    'G#5': 'A#5',  # G# tuned up = A# (Bb)
-                    'A5': 'B5',    # A tuned up = B
-                    'A#5': 'C5',   # A# tuned up = C
-                    'B5': 'C#5'    # B tuned up = C#
-                }
-                
-                if chord in drop_tuning_map:
-                    original_chord = chord
-                    chord = drop_tuning_map[chord]
-                    if debug_enabled and original_chord != self._last_detected_raw:
-                        print(f"[Drop Tuning] {original_chord} -> {chord} (compensating for whole-step-down tuning)")
-                        self._last_detected_raw = original_chord
+                # Apply transposition to display the actual played chord
+                if chord != 'N/A':
+                    display_chord = self.analyzer.transpose_chord_name(chord, -self.analyzer.transposition_offset)
+                    if debug_enabled and chord != display_chord:
+                        print(f"[Transposition] {chord} -> {display_chord} (adjusted for tuning)")
+            else:
+                display_chord = chord
             
             # Debug chromagram values if stuck on same chord
             if debug_enabled and hasattr(self, '_last_chord') and chord == self._last_chord:
@@ -964,7 +1051,7 @@ class ChromagramPanel:
                 'confidence': confidence,
                 'stability': stability,
                 'alternative_keys': [(k, c) for k, c in alt_keys[1:] if c > 0.3],  # Skip first (it's the detected key)
-                'current_chord': chord,
+                'current_chord': display_chord,
                 'chord_confidence': chord_conf,
                 'chord_progression': chord_progression,
                 'harmonic_rhythm': harmonic_rhythm,
@@ -979,7 +1066,7 @@ class ChromagramPanel:
             self.chromagram = chromagram.copy()
             self.detected_key = most_likely_key
             self.key_confidence = confidence
-            self.current_chord = chord
+            self.current_chord = display_chord
             self.chord_confidence = chord_conf
             self.chord_sequence = chord_progression
             self.current_mode = mode
