@@ -8,9 +8,13 @@ import pygame
 import numpy as np
 import math
 import logging
+import time
 from typing import Dict, Any, Tuple, Optional, List, Callable
 from dataclasses import dataclass
 from enum import Enum
+
+# Import waterfall 3D visualization
+from .spectrum_waterfall_3d import SpectrumWaterfall3D
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -107,6 +111,9 @@ class SpectrumDisplay:
         
         # Initialize display components
         self._setup_display()
+        
+        # Initialize 3D waterfall visualization
+        self.waterfall_3d = SpectrumWaterfall3D(num_bars=bars, use_gpu=True)
         
         logger.info(f"SpectrumDisplay initialized: {width}x{height}, {bars} bars")
         
@@ -252,7 +259,7 @@ class SpectrumDisplay:
         
     def draw_spectrum_bars(self, spectrum_data: np.ndarray, vis_params: Dict[str, Any]) -> bool:
         """
-        Draw spectrum bars with enhanced error handling and validation.
+        Draw spectrum bars with 3D waterfall background and enhanced error handling.
         
         Args:
             spectrum_data: Bar heights (0.0 to 1.0)
@@ -269,6 +276,11 @@ class SpectrumDisplay:
                 
             # Clamp spectrum data to valid range
             spectrum_data = np.clip(spectrum_data, 0.0, 1.0)
+            
+            # Update and render 3D waterfall background first
+            current_time = time.time()
+            self.waterfall_3d.update_spectrum_slice(spectrum_data, current_time)
+            self.waterfall_3d.render_waterfall_layers(self.screen, vis_params, spectrum_data)
             
             # Extract parameters with robust defaults
             vis_start_x = max(0, vis_params.get('vis_start_x', 0))
@@ -289,33 +301,11 @@ class SpectrumDisplay:
             num_bars = min(len(spectrum_data), len(self.colors))
             bar_width = vis_width / num_bars if num_bars > 0 else 1
             
-            # Draw bars
-            for i in range(num_bars):
-                if spectrum_data[i] > 0.001:  # Lower threshold to show more bars
-                    height = int(spectrum_data[i] * max_bar_height)
-                    x = vis_start_x + int(i * bar_width)
-                    # Make bars slightly wider to avoid gaps
-                    # Use ceiling instead of floor to ensure bars touch
-                    width = max(1, int(np.ceil(bar_width)))
-                    
-                    # Get color with fallback
-                    color = self.colors[i] if i < len(self.colors) else (100, 150, 255)
-                    
-                    # Draw upper bar with bounds checking
-                    upper_y = max(spectrum_top, center_y - height)
-                    upper_height = center_y - upper_y
-                    if upper_height > 0:
-                        upper_rect = pygame.Rect(x, upper_y, width, upper_height)
-                        if self._rect_in_bounds(upper_rect):
-                            pygame.draw.rect(self.screen, color, upper_rect)
-                    
-                    # Draw lower bar with bounds checking
-                    lower_height = min(height, spectrum_bottom - center_y)
-                    if lower_height > 0:
-                        lower_color = tuple(max(0, int(c * 0.75)) for c in color)
-                        lower_rect = pygame.Rect(x, center_y, width, lower_height)
-                        if self._rect_in_bounds(lower_rect):
-                            pygame.draw.rect(self.screen, lower_color, lower_rect)
+            # Draw main spectrum bars with transparency to show waterfall
+            self._draw_transparent_spectrum_bars(
+                spectrum_data, num_bars, bar_width, vis_start_x, center_y, 
+                max_bar_height, spectrum_top, spectrum_bottom
+            )
             
             return True
             
@@ -323,6 +313,83 @@ class SpectrumDisplay:
             logger.error(f"Spectrum bar drawing failed: {e}")
             return False
     
+    def _draw_transparent_spectrum_bars(self, spectrum_data: np.ndarray, num_bars: int, 
+                                       bar_width: float, vis_start_x: int, center_y: int,
+                                       max_bar_height: int, spectrum_top: int, spectrum_bottom: int):
+        """Draw main spectrum bars with transparency to allow waterfall visibility"""
+        try:
+            # Main spectrum transparency (0.85 = 85% opaque)
+            main_alpha = 0.85
+            
+            # Create surface for transparent spectrum bars
+            spectrum_surface = pygame.Surface((self.metrics.width, self.metrics.height), pygame.SRCALPHA)
+            
+            # Draw bars on the transparent surface
+            for i in range(num_bars):
+                if spectrum_data[i] > 0.001:
+                    height = int(spectrum_data[i] * max_bar_height)
+                    x = vis_start_x + int(i * bar_width)
+                    width = max(1, int(np.ceil(bar_width)))
+                    
+                    # Get color with fallback
+                    base_color = self.colors[i] if i < len(self.colors) else (100, 150, 255)
+                    color_with_alpha = (*base_color, int(main_alpha * 255))
+                    
+                    # Draw upper bar
+                    upper_y = max(spectrum_top, center_y - height)
+                    upper_height = center_y - upper_y
+                    if upper_height > 0:
+                        upper_rect = pygame.Rect(x, upper_y, width, upper_height)
+                        if self._rect_in_bounds(upper_rect):
+                            pygame.draw.rect(spectrum_surface, color_with_alpha, upper_rect)
+                    
+                    # Draw lower bar (darker)
+                    lower_height = min(height, spectrum_bottom - center_y)
+                    if lower_height > 0:
+                        lower_color = tuple(max(0, int(c * 0.75)) for c in base_color)
+                        lower_color_with_alpha = (*lower_color, int(main_alpha * 255))
+                        lower_rect = pygame.Rect(x, center_y, width, lower_height)
+                        if self._rect_in_bounds(lower_rect):
+                            pygame.draw.rect(spectrum_surface, lower_color_with_alpha, lower_rect)
+            
+            # Blit the transparent spectrum to the main screen
+            self.screen.blit(spectrum_surface, (0, 0))
+            
+        except Exception as e:
+            logger.error(f"Transparent spectrum bar drawing failed: {e}")
+            # Fallback to opaque bars
+            self._draw_opaque_spectrum_bars(spectrum_data, num_bars, bar_width, vis_start_x, 
+                                          center_y, max_bar_height, spectrum_top, spectrum_bottom)
+    
+    def _draw_opaque_spectrum_bars(self, spectrum_data: np.ndarray, num_bars: int, 
+                                  bar_width: float, vis_start_x: int, center_y: int,
+                                  max_bar_height: int, spectrum_top: int, spectrum_bottom: int):
+        """Fallback method to draw opaque spectrum bars (original implementation)"""
+        for i in range(num_bars):
+            if spectrum_data[i] > 0.001:
+                height = int(spectrum_data[i] * max_bar_height)
+                x = vis_start_x + int(i * bar_width)
+                width = max(1, int(np.ceil(bar_width)))
+                
+                # Get color with fallback
+                color = self.colors[i] if i < len(self.colors) else (100, 150, 255)
+                
+                # Draw upper bar
+                upper_y = max(spectrum_top, center_y - height)
+                upper_height = center_y - upper_y
+                if upper_height > 0:
+                    upper_rect = pygame.Rect(x, upper_y, width, upper_height)
+                    if self._rect_in_bounds(upper_rect):
+                        pygame.draw.rect(self.screen, color, upper_rect)
+                
+                # Draw lower bar
+                lower_height = min(height, spectrum_bottom - center_y)
+                if lower_height > 0:
+                    lower_color = tuple(max(0, int(c * 0.75)) for c in color)
+                    lower_rect = pygame.Rect(x, center_y, width, lower_height)
+                    if self._rect_in_bounds(lower_rect):
+                        pygame.draw.rect(self.screen, lower_color, lower_rect)
+
     def _rect_in_bounds(self, rect: pygame.Rect) -> bool:
         """Check if rectangle is within screen bounds"""
         return (rect.x >= 0 and rect.y >= 0 and 
@@ -566,5 +633,23 @@ class SpectrumDisplay:
             },
             "fonts_loaded": self.fonts.is_complete(),
             "display_mode": self.display_mode.value,
-            "color_count": len(self.colors)
+            "color_count": len(self.colors),
+            "waterfall_3d": self.waterfall_3d.get_status()
         }
+    
+    # 3D Waterfall Control Methods
+    def toggle_waterfall_3d(self) -> bool:
+        """Toggle 3D waterfall visualization on/off"""
+        return self.waterfall_3d.toggle_waterfall()
+    
+    def adjust_waterfall_depth(self, delta: float):
+        """Adjust waterfall depth spacing"""
+        self.waterfall_3d.adjust_depth(delta)
+    
+    def adjust_waterfall_speed(self, delta: float):
+        """Adjust waterfall slice update interval"""
+        self.waterfall_3d.adjust_slice_interval(delta)
+    
+    def get_waterfall_status(self) -> Dict[str, Any]:
+        """Get waterfall 3D status"""
+        return self.waterfall_3d.get_status()

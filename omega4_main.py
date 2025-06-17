@@ -1847,6 +1847,41 @@ class ProfessionalLiveAudioAnalyzer:
         elif event.key == pygame.K_DOWN:
             self.input_gain = max(self.input_gain / 1.2, 0.1)
             print(f"Input gain: {self.input_gain:.1f}x ({20*np.log10(self.input_gain):.1f}dB)")
+        elif event.key == pygame.K_w:
+            if pygame.key.get_mods() & pygame.KMOD_CTRL:
+                # Ctrl+W = Toggle 3D waterfall
+                enabled = self.display.toggle_waterfall_3d()
+                print(f"3D Spectrum Waterfall: {'ENABLED' if enabled else 'DISABLED'}")
+            elif pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+W = Adjust waterfall depth
+                self.display.adjust_waterfall_depth(2.0)
+                status = self.display.get_waterfall_status()
+                print(f"Waterfall Depth: {status['depth_spacing']:.1f}px")
+            elif pygame.key.get_mods() & pygame.KMOD_ALT:
+                # Alt+W = Display waterfall status
+                status = self.display.get_waterfall_status()
+                print(f"\n{'='*50}")
+                print(f"3D WATERFALL SPECTROGRAM STATUS")
+                print(f"{'='*50}")
+                print(f"Enabled: {status['enabled']}")
+                print(f"GPU Acceleration: {status['gpu_acceleration']}")
+                print(f"Active Slices: {status['num_slices']}/{status['max_slices']}")
+                print(f"Slice Interval: {status['slice_interval']:.2f}s")
+                print(f"Depth Spacing: {status['depth_spacing']:.1f}px")
+                print(f"GPU Memory: {status['gpu_memory_mb']:.1f}MB")
+                print(f"Interpolation: {status['interpolation']}")
+                print(f"{'='*50}\n")
+        elif event.key == pygame.K_q:
+            if pygame.key.get_mods() & pygame.KMOD_CTRL:
+                # Ctrl+Q = Adjust waterfall speed (slice interval)
+                self.display.adjust_waterfall_speed(-0.02)  # Faster updates
+                status = self.display.get_waterfall_status()
+                print(f"Waterfall Speed: {status['slice_interval']:.2f}s interval")
+            elif pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                # Shift+Q = Slower waterfall updates
+                self.display.adjust_waterfall_speed(0.02)  # Slower updates
+                status = self.display.get_waterfall_status()
+                print(f"Waterfall Speed: {status['slice_interval']:.2f}s interval")
 
     def resize_window(self, width, height):
         """Resize the window and update UI elements"""
@@ -2722,6 +2757,7 @@ def main():
     print("  🏠 Room Mode Detection: Acoustic analysis")
     print("  🎯 Adaptive Frequency Allocation: Dynamic bass detail (60-80% based on content)")
     print("  🎨 Professional UI: Studio-grade visualization with multiple panels")
+    print("  🌊 3D Waterfall Spectrogram: Real-time depth visualization with GPU acceleration")
     print("Professional Controls:")
     print("  Panel Toggle Keys (press to show/hide, Shift+key to freeze/unfreeze):")
     print("    M: Professional meters | U: VU meters | H: Harmonic analysis")
@@ -2745,6 +2781,11 @@ def main():
     print("  Professional Meters Controls:")
     print("    Shift+R: Reset peak hold | Shift+W: Cycle weighting (K/A/C/Z)")
     print("    Shift+T: Cycle peak hold time (0.5s/1s/2s/5s/10s)")
+    print("  ")
+    print("  3D Waterfall Spectrogram Controls:")
+    print("    Ctrl+W: Toggle 3D waterfall | Shift+W: Adjust depth spacing")
+    print("    Alt+W: Display waterfall status | Ctrl+Q: Increase waterfall speed")
+    print("    Shift+Q: Decrease waterfall speed")
     print("=" * 90)
 
     analyzer = ProfessionalLiveAudioAnalyzer(
