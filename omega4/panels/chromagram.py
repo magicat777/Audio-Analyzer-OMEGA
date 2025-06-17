@@ -249,6 +249,15 @@ class ChromagramAnalyzer:
         if np.sum(chroma) == 0:
             return "Unknown", 0.0
         
+        # Check for low variance (evenly distributed chromagram)
+        chroma_variance = np.var(chroma)
+        if chroma_variance < 0.001:  # Very flat chromagram
+            # Try to use chord-based detection
+            chord_key = self._detect_key_from_chords()
+            if chord_key:
+                return chord_key, 0.5
+            return "Unknown", 0.0
+        
         # Get genre-specific weights if available
         genre_weights = self.genre_profiles.get(self.current_genre.lower(), self.genre_profiles['pop'])
         major_weights = genre_weights['major_weights']
@@ -418,6 +427,11 @@ class ChromagramAnalyzer:
         if len(recent_chords) < 3:
             return None
         
+        # Debug output
+        debug_enabled = getattr(self, '_debug_enabled', False)
+        if debug_enabled:
+            print(f"[Chord-based Key] Analyzing chords: {recent_chords}")
+        
         # Count chord roots and types
         chord_roots = {}
         has_major = False
@@ -450,10 +464,14 @@ class ChromagramAnalyzer:
         # Find most common root
         most_common_root = max(chord_roots, key=chord_roots.get)
         
-        # Simple heuristic: if F# appears frequently with D, likely D Major
+        # Simple heuristic: if F# appears frequently with D, likely D Major or F# minor
         if 'F#' in chord_roots and 'D' in chord_roots:
             if chord_roots['F#'] > 0 and chord_roots['D'] > 0:
-                return 'D Major'
+                # Check if F# appears more (could be F# minor)
+                if chord_roots['F#'] > chord_roots['D'] * 1.5:
+                    return 'F# Minor' if has_minor else 'F# Major'
+                else:
+                    return 'D Major'
         
         # If C# appears with A, likely A Major
         if 'C#' in chord_roots and 'A' in chord_roots:
@@ -478,10 +496,16 @@ class ChromagramAnalyzer:
         # Default: use most common root
         if chord_roots[most_common_root] >= 3:  # Appears at least 3 times
             if has_minor and not has_major:
-                return f"{most_common_root} Minor"
+                result = f"{most_common_root} Minor"
             else:
-                return f"{most_common_root} Major"
+                result = f"{most_common_root} Major"
+            
+            if debug_enabled:
+                print(f"[Chord-based Key] Result: {result} (root {most_common_root} appears {chord_roots[most_common_root]} times)")
+            return result
         
+        if debug_enabled:
+            print(f"[Chord-based Key] No clear key found from chords")
         return None
     
     def _detect_metal_riff_pattern(self, chroma: np.ndarray, debug_enabled: bool = False) -> Optional[str]:
@@ -1046,6 +1070,9 @@ class ChromagramPanel:
                     for i, val in enumerate(chromagram):
                         if val > 0.05:
                             print(f"  {self.analyzer.note_names[i]}: {val:.3f}")
+            
+            # Store debug flag for analyzer
+            self.analyzer._debug_enabled = debug_enabled
             
             # Detect key
             key, correlation = self.analyzer.detect_key(chromagram)
