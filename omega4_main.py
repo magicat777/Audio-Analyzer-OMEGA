@@ -1077,8 +1077,11 @@ class ProfessionalLiveAudioAnalyzer:
             panel_updates['pitch_detection'] = ((audio_windowed,), {})
             
         # Get current genre for chromagram
+        # Get current genre from the genre classification panel
         current_genre = None
-        if hasattr(self, 'genre_classification_panel') and hasattr(self.genre_classification_panel, 'current_genre'):
+        if self.genre_classification and hasattr(self.genre_classification, 'current_genre'):
+            current_genre = self.genre_classification.current_genre
+        elif hasattr(self, 'genre_classification_panel') and hasattr(self.genre_classification_panel, 'current_genre'):
             current_genre = self.genre_classification_panel.current_genre
             
         # Chromagram (medium priority)

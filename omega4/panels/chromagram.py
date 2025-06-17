@@ -391,8 +391,8 @@ class ChromagramAnalyzer:
         best_chord = "N/A"
         best_score = 0.0
         
-        # Special metal riff detection for D5-E5 patterns
-        if self.current_genre.lower() in ['metal', 'rock']:
+        # Special metal riff detection for D5-E5 patterns (only for actual metal genre)
+        if self.current_genre.lower() == 'metal':
             riff_chord = self._detect_metal_riff_pattern(chroma, debug_enabled)
             if riff_chord:
                 return riff_chord, 0.9  # High confidence for detected riff patterns
@@ -780,11 +780,11 @@ class ChromagramPanel:
                     print(f"[Chromagram] Genre changed to: {current_genre}")
                     self._last_genre = current_genre
             else:
-                # Default to metal for better power chord detection when genre is unknown
-                self.analyzer.set_genre_context('metal')
-                if debug_enabled and 'metal' != getattr(self, '_last_genre', None):
-                    print(f"[Chromagram] Genre unknown, defaulting to: metal")
-                    self._last_genre = 'metal'
+                # Default to pop for more general chord detection when genre is unknown
+                self.analyzer.set_genre_context('pop')
+                if debug_enabled and 'pop' != getattr(self, '_last_genre', None):
+                    print(f"[Chromagram] Genre unknown, defaulting to: pop")
+                    self._last_genre = 'pop'
                 
             # Compute chromagram
             chromagram = self.analyzer.compute_chromagram(fft_data, freqs)
@@ -809,7 +809,7 @@ class ChromagramPanel:
             
             # For metal genre, auto-detect and compensate for drop tuning
             # Metallica often uses whole-step-down tuning
-            if self.analyzer.current_genre == 'metal':
+            if self.analyzer.current_genre == 'metal' and current_genre == 'metal':
                 # Check if this looks like drop-tuned power chords
                 # Debug: Check if we're seeing D (which would be E in standard tuning)
                 has_d = 'D' in [self.analyzer.note_names[i] for i, v in enumerate(chromagram) if v > 0.15]
