@@ -11,7 +11,6 @@ from .harmonic_analysis import HarmonicAnalysisPanel
 from .pitch_detection import PitchDetectionPanel
 from .chromagram import ChromagramPanel
 from .genre_classification import GenreClassificationPanel
-from .integrated_music_panel import IntegratedMusicPanel
 
 # New panels
 from .voice_detection import VoiceDetectionPanel
@@ -26,8 +25,7 @@ __all__ = [
     'PitchDetectionPanel',
     'ChromagramPanel',
     'GenreClassificationPanel',
-    'IntegratedMusicPanel',
-    'VoiceDetectionPanel',
+        'VoiceDetectionPanel',
     'PhaseCorrelationPanel',
     'TransientDetectionPanel'
 ]
