@@ -54,3 +54,7 @@ yarn-error.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# Markdown files (except README.md)
+*.md
+!README.md
